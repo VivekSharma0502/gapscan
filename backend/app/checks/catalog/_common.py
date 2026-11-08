@@ -7,6 +7,39 @@ from app.checks.base import Platform, PlatformFix
 PlatformFixes = dict[Platform, PlatformFix]
 
 
+def dns_record_fixes(record_type: str, name: str, value: str, note: str = "") -> PlatformFixes:
+    """How to add one DNS record. DNS lives wherever the domain's nameservers point."""
+    record = f"Type: {record_type}\nName: {name}\nValue: {value}"
+    if note:
+        record = f"{record}\n\n{note}"
+    return {
+        Platform.VERCEL: PlatformFix(
+            instructions=(
+                "If Vercel hosts your DNS, add this record on your domain's page in the Vercel "
+                "dashboard. Otherwise add it wherever your DNS is managed."
+            ),
+            snippet=record,
+        ),
+        Platform.NETLIFY: PlatformFix(
+            instructions=(
+                "If Netlify hosts your DNS, add this record under Domain management. Otherwise "
+                "add it wherever your DNS is managed."
+            ),
+            snippet=record,
+        ),
+        Platform.NGINX: PlatformFix(
+            instructions=(
+                "nginx doesn't control DNS, so there is nothing to change here. Add the record "
+                "described above at your DNS provider."
+            ),
+        ),
+        Platform.CLOUDFLARE: PlatformFix(
+            instructions="Open DNS, then Records, and add this record.",
+            snippet=record,
+        ),
+    }
+
+
 def header_fixes(name: str, value: str) -> PlatformFixes:
     """How to set one response header on each platform."""
     vercel_config = {

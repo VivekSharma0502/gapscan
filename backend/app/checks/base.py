@@ -85,6 +85,9 @@ class Input(StrEnum):
     HTTPS = "https"
     HTTP = "http"
     TLS = "tls"
+    SPF = "spf_records"
+    DMARC = "dmarc_records"
+    CAA = "caa_records"
 
 
 class SkipCheck(Exception):
@@ -99,6 +102,14 @@ class ScanContext:
     https: SafeResponse | None = None
     http: SafeResponse | None = None
     tls: TlsProbe | None = None
+    # The domain SPF and DMARC are published on, and its records. An empty list means the
+    # lookup worked and there are no records, which is different from None.
+    email_domain: str | None = None
+    spf_records: list[str] | None = None
+    dmarc_records: list[str] | None = None
+    caa_records: list[str] | None = None
+    # Set when the hostname sits under a domain shared by many customers, like vercel.app.
+    shared_platform_suffix: str | None = None
     # Why an input is missing, shown to the user next to the checks it prevented.
     skip_reasons: Mapping[Input, str] = field(default_factory=dict)
     # Part of the context so expiry checks give the same answer every time in tests.

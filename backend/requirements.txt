@@ -5,3 +5,5 @@ pydantic-settings==2.16.2
 # Only imported by core/safe_http.py, which enforces the SSRF guard.
 httpx==0.28.1
 dnspython==2.9.2
+# Ships the Public Suffix List inside the package, so it makes no network calls.
+publicsuffixlist==1.1.2.20261107

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1b: DNS and email checks
+
+**Added**
+- Checks for missing or weak SPF and DMARC and missing CAA, with text and DNS fixes per platform.
+- An info note for hosts on shared platform domains such as `*.vercel.app`, explaining why SPF, DMARC and CAA don't apply. Those records belong to the platform, so owners aren't marked down for them.
+
+**Changed**
+- Added `publicsuffixlist`, which ships the list offline and makes no network calls. It finds the real registered domain for names like `shop.example.co.in` and identifies shared platform domains. Run `pip install -r requirements-dev.txt` to pick it up.
+
 ## 2026-11-08: Phase 1, step 1b: cookie checks
 
 **Added**
