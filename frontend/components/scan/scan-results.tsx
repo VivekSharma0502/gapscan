@@ -11,8 +11,25 @@ import type { Finding, Platform, Scan } from "@/lib/api";
 import { SEVERITIES, SEVERITY_STYLES } from "@/lib/severity";
 import { cn } from "@/lib/utils";
 
-function issues(count: number): string {
-  return `${count} ${count === 1 ? "issue" : "issues"}`;
+function counted(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+// Findings arrive most severe first, so if every finding shown is info-level, any
+// hidden from the teaser are too.
+function hasOnlyNotes(scan: Scan): boolean {
+  return (
+    scan.findings.length > 0 &&
+    scan.findings.every((finding) => finding.severity === "info")
+  );
+}
+
+function findingsSummary(scan: Scan): string {
+  if (scan.total_findings === 0) return "Passive checks found no issues.";
+  if (hasOnlyNotes(scan)) {
+    return `No issues found · ${counted(scan.total_findings, "note")}`;
+  }
+  return `Passive checks found ${counted(scan.total_findings, "issue")}.`;
 }
 
 function ScoreSummary({ scan }: { scan: Scan }) {
@@ -46,11 +63,7 @@ function ScoreSummary({ scan }: { scan: Scan }) {
           {target}
         </h1>
         {scan.score_label && <Badge variant="outline">{scan.score_label}</Badge>}
-        <p className="text-sm text-muted-foreground">
-          {scan.total_findings === 0
-            ? "Passive checks found no issues."
-            : `Passive checks found ${issues(scan.total_findings)}.`}
-        </p>
+        <p className="text-sm text-muted-foreground">{findingsSummary(scan)}</p>
       </div>
     </section>
   );
@@ -99,12 +112,12 @@ function FindingGroups({ findings }: { findings: Finding[] }) {
   );
 }
 
-function SignupTeaser({ hidden }: { hidden: number }) {
+function SignupTeaser({ hidden, noun }: { hidden: number; noun: string }) {
   return (
     <section className="flex flex-col items-start gap-3 rounded-xl bg-card p-6 ring-1 ring-foreground/10">
       <h2 className="text-lg font-semibold tracking-tight">
         {hidden > 0
-          ? `Sign up to see the other ${issues(hidden)}`
+          ? `Sign up to see the other ${counted(hidden, noun)}`
           : "Sign up to keep this report"}
       </h2>
       <p className="text-sm text-pretty text-muted-foreground">
@@ -148,7 +161,12 @@ export function ScanResults({ scan }: { scan: Scan }) {
         </section>
       )}
 
-      {scan.teaser && <SignupTeaser hidden={hidden} />}
+      {scan.teaser && (
+        <SignupTeaser
+          hidden={hidden}
+          noun={hasOnlyNotes(scan) ? "note" : "issue"}
+        />
+      )}
     </div>
   );
 }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-08: Results summary for info-only scans
+
+**Changed**
+- When every finding is info-level, the results summary says "No issues found · 1 note" instead of counting issues, and the sign-up teaser says "notes" too. Info findings cost no points, so calling them issues overstated the problem.
+
+**Docs**
+- Added a later TODO to `PLAN.md` for a broader "CSP quality" check, building on `headers.csp_weak`.
+
 ## 2026-11-08: Phase 1, step 1d: results page
 
 **Added**

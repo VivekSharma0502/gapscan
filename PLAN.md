@@ -92,6 +92,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - PDF report (client-ready)
 - Badge `GET /api/badge/{domain}.svg`
 - TODO: check the detected WordPress version against the official WordPress latest-version API, through `safe_http`, and raise severity when it is outdated
+- TODO: "CSP quality" check that flags `unsafe-inline`, `unsafe-eval` and wildcard sources. `headers.csp_weak` already does this at low severity for `script-src`/`default-src` and exact broad sources (`*`, `http:`, `https:`, `data:`), so extend it to other directives such as `style-src`, partial wildcards such as `*.example.com` and `https://*`, and severity based on how much each source weakens the policy
 
 ### Phase 5 — Monetize + polish (later)
 - Razorpay plans, agency white-label (logo/name on PDF), Hindi/Gujarati report text, team members
