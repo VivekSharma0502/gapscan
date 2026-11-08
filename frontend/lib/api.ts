@@ -116,6 +116,45 @@ export interface QuickScanCreated {
   claim_token: string | null;
 }
 
+export interface ScanSummary {
+  id: string;
+  target: string;
+  mode: "quick" | "full";
+  status: ScanJobStatus;
+  result_status: ResultStatus | null;
+  // Null when the site couldn't be read, which can still earn a grade.
+  score: number | null;
+  grade: string | null;
+  score_label: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface DashboardDomain {
+  id: string;
+  hostname: string;
+  verified: boolean;
+  created_at: string;
+  // The newest graded scan: full if verified, otherwise quick.
+  latest: ScanSummary | null;
+  // The newest attempt of that kind, in any state.
+  last_scan: ScanSummary | null;
+  // Score change from the previous scan. Null when there's nothing fair to compare.
+  trend: number | null;
+}
+
+export interface Dashboard {
+  domains: DashboardDomain[];
+  recent_scans: ScanSummary[];
+}
+
+export interface ScanPage {
+  items: ScanSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export class ApiError extends Error {
   readonly status: number;
 
@@ -232,6 +271,25 @@ export function verifyDomain(id: string): Promise<VerifyResult> {
 export function startFullScan(id: string): Promise<FullScanCreated> {
   return request(`/api/domains/${encodeURIComponent(id)}/scan`, {
     method: "POST",
+  });
+}
+
+export function getDashboard(signal?: AbortSignal): Promise<Dashboard> {
+  return request("/api/dashboard", { signal });
+}
+
+export function listDomainScans(
+  id: string,
+  options: { limit: number; offset?: number; scoredOnly?: boolean },
+  signal?: AbortSignal,
+): Promise<ScanPage> {
+  const query = new URLSearchParams({
+    limit: String(options.limit),
+    offset: String(options.offset ?? 0),
+    scored_only: String(options.scoredOnly ?? false),
+  });
+  return request(`/api/domains/${encodeURIComponent(id)}/scans?${query}`, {
+    signal,
   });
 }
 

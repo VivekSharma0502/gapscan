@@ -3,6 +3,9 @@
 ## 2026-11-09: Phase 2, step 2c: dashboard and rename to GapScan
 
 **Added**
+- A `/dashboard` page, now where sign-in lands unless the person was heading somewhere specific, and "Dashboard" in the user menu. It has a card per domain and a recent scans list, with empty states for a new account, a domain with no scans and a first scan.
+- A score history chart per verified domain, where clicking a point opens that scan and a hollow point marks a partial result. Each card also has a paginated scan history list, which is the keyboard and screen reader route to the same scans.
+- New dependency: `recharts`.
 - `GET /api/dashboard`: each domain's latest grade and score, last scan and change from the previous scan, plus the 10 most recent scans, including claimed anonymous ones.
 - `GET /api/domains/{id}/scans`: a domain's full scans, newest first, paginated, with `scored_only` for charts. Someone else's domain returns 404.
 - Three indexes for these reads. The owner-only index on `scans` is replaced by one that also covers its date order. `alembic upgrade head` applies them.

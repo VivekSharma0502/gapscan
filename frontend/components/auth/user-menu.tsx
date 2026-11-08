@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleUser, Globe, LogOut } from "lucide-react";
+import { CircleUser, Globe, LayoutDashboard, LogOut } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -18,8 +18,12 @@ import {
 import { isAuthConfigured, signOut } from "@/lib/supabase";
 
 function signInHref(pathname: string): string {
-  const isAuthPage = pathname === "/login" || pathname.startsWith("/auth/");
-  return isAuthPage ? "/login" : `/login?next=${encodeURIComponent(pathname)}`;
+  // The home page has nothing to come back to, so those visitors get the dashboard.
+  const hasNoReturnPath =
+    pathname === "/" || pathname === "/login" || pathname.startsWith("/auth/");
+  return hasNoReturnPath
+    ? "/login"
+    : `/login?next=${encodeURIComponent(pathname)}`;
 }
 
 export function UserMenu() {
@@ -55,6 +59,10 @@ export function UserMenu() {
           </DropdownMenuLabel>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
+        <DropdownMenuItem render={<Link href="/dashboard" />}>
+          <LayoutDashboard aria-hidden />
+          Dashboard
+        </DropdownMenuItem>
         <DropdownMenuItem render={<Link href="/domains" />}>
           <Globe aria-hidden />
           My domains

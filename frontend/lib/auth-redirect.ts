@@ -7,18 +7,21 @@
 const STORAGE_KEY = "scankit.auth_next";
 const METHOD_KEY = "scankit.auth_method";
 const BASE = "https://scankit.invalid";
+const DEFAULT_PATH = "/dashboard";
 
 export type SignInMethod = "github" | "email";
 
 // Security: only paths on this site, so a crafted link can't use sign-in to bounce someone
 // to a lookalike. Parsing handles the forms a prefix check misses, such as "/\evil.com".
 export function safeNextPath(value: string | null | undefined): string {
-  if (!value?.startsWith("/")) return "/";
+  if (!value?.startsWith("/")) return DEFAULT_PATH;
   try {
     const url = new URL(value, BASE);
-    return url.origin === BASE ? `${url.pathname}${url.search}${url.hash}` : "/";
+    return url.origin === BASE
+      ? `${url.pathname}${url.search}${url.hash}`
+      : DEFAULT_PATH;
   } catch {
-    return "/";
+    return DEFAULT_PATH;
   }
 }
 
@@ -31,7 +34,7 @@ export function rememberSignIn(path: string, method: SignInMethod): void {
     localStorage.setItem(STORAGE_KEY, path);
     localStorage.setItem(METHOD_KEY, method);
   } catch {
-    // Storage is blocked. Sign-in still works and lands on the home page.
+    // Storage is blocked. Sign-in still works and lands on the dashboard.
   }
 }
 
@@ -59,7 +62,7 @@ export function readNextPath(): string {
   try {
     return safeNextPath(localStorage.getItem(STORAGE_KEY));
   } catch {
-    return "/";
+    return DEFAULT_PATH;
   }
 }
 

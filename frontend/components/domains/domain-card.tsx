@@ -1,16 +1,18 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { BadgeCheck, CircleDashed, LoaderCircle, ScanSearch } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { BadgeCheck, CircleDashed, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 
+import {
+  RunFullScanButton,
+  useFullScan,
+} from "@/components/domains/run-full-scan-button";
 import { CopyButton } from "@/components/scan/copy-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   deleteDomain,
-  startFullScan,
   verifyDomain,
   type Domain,
   type VerificationMethod,
@@ -158,20 +160,13 @@ function DeleteDomain({ domain }: { domain: Domain }) {
 }
 
 export function DomainCard({ domain }: { domain: Domain }) {
-  const router = useRouter();
   const queryClient = useQueryClient();
   const verify = useMutation({
     mutationFn: () => verifyDomain(domain.id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: DOMAINS_KEY }),
   });
-  const scan = useMutation({
-    mutationFn: () => startFullScan(domain.id),
-    onSuccess: (created) => router.push(`/scan/${created.id}`),
-    // The API refuses a domain that has since lost its verification, so show its real state.
-    onError: () => queryClient.invalidateQueries({ queryKey: DOMAINS_KEY }),
-  });
+  const scan = useFullScan(domain.id);
   const failures = verify.data?.failures ?? [];
-  const scanBusy = scan.isPending || scan.isSuccess;
 
   const verifyButton = (variant: "default" | "outline") => (
     <Button
@@ -248,14 +243,7 @@ export function DomainCard({ domain }: { domain: Domain }) {
       <footer className="flex flex-wrap items-center gap-2">
         {domain.verified ? (
           <>
-            <Button disabled={scanBusy} onClick={() => scan.mutate()}>
-              {scanBusy ? (
-                <LoaderCircle className="animate-spin" aria-hidden />
-              ) : (
-                <ScanSearch aria-hidden />
-              )}
-              {scanBusy ? "Starting…" : "Run full scan"}
-            </Button>
+            <RunFullScanButton scan={scan} />
             {verifyButton("outline")}
           </>
         ) : (
