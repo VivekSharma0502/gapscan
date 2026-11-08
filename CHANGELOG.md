@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1b: WordPress version check
+
+**Added**
+- A check that reports the WordPress version shown in the homepage generator tag. It only reads the homepage already fetched, so it stays passive.
+- A TODO in `PLAN.md` (Phase 4) to compare the version against the official latest-version API, because a hardcoded "latest" would go stale.
+
 ## 2026-11-08: Phase 1, step 1b: DNS and email checks
 
 **Added**

@@ -91,6 +91,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - Alerts on new High/Critical + SSL/domain expiry (email, Telegram)
 - PDF report (client-ready)
 - Badge `GET /api/badge/{domain}.svg`
+- TODO: check the detected WordPress version against the official WordPress latest-version API, through `safe_http`, and raise severity when it is outdated
 
 ### Phase 5 — Monetize + polish (later)
 - Razorpay plans, agency white-label (logo/name on PDF), Hindi/Gujarati report text, team members
