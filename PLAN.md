@@ -1,4 +1,4 @@
-# PLAN.md — Security Scanner SaaS (working name: ScanKit — rename later)
+# PLAN.md — Security Scanner SaaS (GapScan, name set in `product.json`)
 
 ## One-liner
 Security check for apps built by students, freelancers and small agencies — website + GitHub repo scanning in one dashboard, plain-language fixes, priced in INR.
@@ -74,7 +74,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 
 ### Phase 2 — Accounts + verified domains (Week 2–3)
 - Supabase Auth (GitHub login + email)
-- Add domain (3 per user for now) → prove ownership with a DNS TXT record at `_scankit-verify.<hostname>` containing `scankit-verify=<token>`, or a file at `https://<hostname>/.well-known/scankit-verify.txt` containing only the token → verify. Ownership is proven again before every full scan
+- Add domain (3 per user for now) → prove ownership with a DNS TXT record at `_gapscan-verify.<hostname>` containing `gapscan-verify=<token>`, or a file at `https://<hostname>/.well-known/gapscan-verify.txt` containing only the token → verify. Domains added before the rename also keep accepting the `scankit-verify` names. Ownership is proven again before every full scan
 - Active checks (**verified domains only**): `/.env`, `/.git/HEAD`, `.DS_Store`, backup files, source maps, directory listing
 - Dashboard: domains, latest score, score history chart, scan history
 

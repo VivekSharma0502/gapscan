@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-09: Phase 2, step 2c: dashboard and rename to GapScan
+
+**Changed**
+- The product is now GapScan. The name is set once, in `product.json`, and the backend and frontend both read it, so a future rename is a one-line change. A build or startup without the file fails rather than showing an old name.
+- New domains publish `_gapscan-verify` and `gapscan-verify.txt`. Domains that existed before the rename keep accepting the `scankit-verify` names as well, tracked per domain, so nobody's verification breaks and the old names retire on their own. Run `alembic upgrade head`, and restart the worker.
+- A domain only loses its verification when every accepted name has definitely failed. A temporary failure on an older record doesn't count.
+- Verification names are fixed strings and don't follow `product.json`, because customers publish them. Database, Celery and browser storage names stay `scankit`, since users never see them and changing storage keys would lose unredeemed claim tokens.
+- `SCANNER_USER_AGENT` now defaults to a value built from the product name. A copy of it in `.env` overrides that.
+
 ## 2026-11-08: Phase 2, step 2b: verified domains and active checks
 
 **Added**

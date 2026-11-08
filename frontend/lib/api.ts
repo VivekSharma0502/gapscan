@@ -86,6 +86,8 @@ export interface Domain {
     file_url: string;
     file_content: string;
   };
+  // True when a record or file published under the old scankit-verify names still counts.
+  legacy_names_accepted: boolean;
   created_at: string;
 }
 

@@ -4,6 +4,8 @@ from typing import Annotated
 from pydantic import Field, IPvAnyAddress, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.core.product import PRODUCT_NAME
+
 ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 
@@ -16,7 +18,9 @@ class Settings(BaseSettings):
 
     # Security: scan traffic identifies itself and links to a page explaining it, so site
     # owners can see who is probing them. Replace the placeholder URL once that page exists.
-    scanner_user_agent: str = "ScanKitBot/0.1 (+https://scankit.example/about-scanner)"
+    scanner_user_agent: str = (
+        f"{PRODUCT_NAME.replace(' ', '')}Bot/0.1 (+https://gapscan.example/about-scanner)"
+    )
 
     # DNS servers for scan lookups. Empty means use the system's DNS. Security: public
     # resolvers keep scans from seeing internal names served by the host's own DNS.

@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, DateTime, ForeignKey, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, UniqueConstraint, Uuid, false
 from sqlmodel import Field, SQLModel
 
 from app.models.scan import utc_now
@@ -27,6 +27,11 @@ class Domain(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
     verified_method: str | None = Field(default=None, max_length=8)
+    # True only for domains added before the rename to GapScan, which may have published
+    # the scankit-verify names. New domains use the current names only.
+    accepts_legacy_verify_names: bool = Field(
+        default=False, sa_column=Column(Boolean, nullable=False, server_default=false())
+    )
     created_at: datetime = Field(
         default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False)
     )

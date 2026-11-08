@@ -13,10 +13,26 @@ from app.core.safe_http import (
     safe_get,
 )
 
-TXT_PREFIX = "_scankit-verify"
-TXT_VALUE_PREFIX = "scankit-verify="
-FILE_PATH = "/.well-known/scankit-verify.txt"
 _MAX_FILE_BYTES = 4096
+
+
+@dataclass(frozen=True)
+class VerificationNames:
+    txt_prefix: str
+    txt_value_prefix: str
+    file_path: str
+
+
+# Fixed strings, not built from the product name: customers publish these, so a rename must
+# not silently change what we look for.
+CURRENT_NAMES = VerificationNames(
+    "_gapscan-verify", "gapscan-verify=", "/.well-known/gapscan-verify.txt"
+)
+# From before the rename. Still accepted for domains added then, whose owners already
+# published them. The per-domain token is the proof, so the older name is no weaker.
+LEGACY_NAMES = VerificationNames(
+    "_scankit-verify", "scankit-verify=", "/.well-known/scankit-verify.txt"
+)
 
 
 class VerificationMethod(StrEnum):
@@ -47,7 +63,9 @@ class MethodFailure:
 @dataclass(frozen=True)
 class OwnershipResult:
     method: VerificationMethod | None
+    # What to tell the user: only the current names, which are the ones they're shown.
     failures: tuple[MethodFailure, ...] = ()
+    legacy_failures: tuple[MethodFailure, ...] = ()
 
     @property
     def proven(self) -> bool:
@@ -55,24 +73,27 @@ class OwnershipResult:
 
     @property
     def definitely_gone(self) -> bool:
-        return not self.proven and all(failure.definite for failure in self.failures)
+        # Security for users: every accepted name counts, so a temporary failure on an older
+        # record can't strip a domain's verification.
+        checked = self.failures + self.legacy_failures
+        return not self.proven and all(failure.definite for failure in checked)
 
 
-def txt_record_name(hostname: str) -> str:
+def txt_record_name(hostname: str, names: VerificationNames = CURRENT_NAMES) -> str:
     # A prefix, because a hostname with a CNAME, usual for hosted apps, can't also have a TXT.
-    return f"{TXT_PREFIX}.{hostname}"
+    return f"{names.txt_prefix}.{hostname}"
 
 
-def txt_record_value(token: str) -> str:
-    return f"{TXT_VALUE_PREFIX}{token}"
+def txt_record_value(token: str, names: VerificationNames = CURRENT_NAMES) -> str:
+    return f"{names.txt_value_prefix}{token}"
 
 
-def verification_file_url(hostname: str) -> str:
-    return f"https://{hostname}{FILE_PATH}"
+def verification_file_url(hostname: str, names: VerificationNames = CURRENT_NAMES) -> str:
+    return f"https://{hostname}{names.file_path}"
 
 
-def _check_dns(hostname: str, token: str) -> MethodFailure | None:
-    name = txt_record_name(hostname)
+def _check_dns(hostname: str, token: str, names: VerificationNames) -> MethodFailure | None:
+    name = txt_record_name(hostname, names)
 
     def failed(code: FailureCode, message: str, *, definite: bool = True) -> MethodFailure:
         return MethodFailure(VerificationMethod.DNS, code, message, definite)
@@ -85,9 +106,9 @@ def _check_dns(hostname: str, token: str) -> MethodFailure | None:
             "The DNS lookup didn't complete. Please try again in a moment.",
             definite=False,
         )
-    if txt_record_value(token) in records:
+    if txt_record_value(token, names) in records:
         return None
-    if any(record.startswith(TXT_VALUE_PREFIX) for record in records):
+    if any(record.startswith(names.txt_value_prefix) for record in records):
         return failed(
             FailureCode.TXT_MISMATCH,
             f"The TXT record at {name} has a different token. Copy the value shown here.",
@@ -98,8 +119,8 @@ def _check_dns(hostname: str, token: str) -> MethodFailure | None:
     )
 
 
-def _check_file(hostname: str, token: str) -> MethodFailure | None:
-    url = verification_file_url(hostname)
+def _check_file(hostname: str, token: str, names: VerificationNames) -> MethodFailure | None:
+    url = verification_file_url(hostname, names)
 
     def failed(code: FailureCode, message: str, *, definite: bool = True) -> MethodFailure:
         return MethodFailure(VerificationMethod.FILE, code, message, definite)
@@ -144,15 +165,24 @@ def _check_file(hostname: str, token: str) -> MethodFailure | None:
     return None
 
 
-def prove_ownership(hostname: str, token: str) -> OwnershipResult:
-    """Try both methods at once, so a slow one doesn't add to the other's wait."""
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        dns_check = pool.submit(_check_dns, hostname, token)
-        file_check = pool.submit(_check_file, hostname, token)
-        dns_failure, file_failure = dns_check.result(), file_check.result()
+def prove_ownership(hostname: str, token: str, *, accept_legacy: bool = False) -> OwnershipResult:
+    """Try every method at once, so a slow one doesn't add to the others' wait."""
+    name_sets = [CURRENT_NAMES, LEGACY_NAMES] if accept_legacy else [CURRENT_NAMES]
+    with ThreadPoolExecutor(max_workers=2 * len(name_sets)) as pool:
+        checks = [
+            (
+                pool.submit(_check_dns, hostname, token, names),
+                pool.submit(_check_file, hostname, token, names),
+            )
+            for names in name_sets
+        ]
+        outcomes = [(dns.result(), file.result()) for dns, file in checks]
 
-    if dns_failure is None:
-        return OwnershipResult(VerificationMethod.DNS)
-    if file_failure is None:
-        return OwnershipResult(VerificationMethod.FILE)
-    return OwnershipResult(None, (dns_failure, file_failure))
+    for dns_failure, file_failure in outcomes:
+        if dns_failure is None:
+            return OwnershipResult(VerificationMethod.DNS)
+        if file_failure is None:
+            return OwnershipResult(VerificationMethod.FILE)
+
+    failures = [tuple(item for item in pair if item is not None) for pair in outcomes]
+    return OwnershipResult(None, failures[0], failures[1] if accept_legacy else ())

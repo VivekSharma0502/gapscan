@@ -9,9 +9,10 @@ from app.api.domains import router as domains_router
 from app.api.health import router as health_router
 from app.api.scans import router as scans_router
 from app.core.config import settings
+from app.core.product import PRODUCT_NAME
 from app.core.rate_limit import limiter
 
-app = FastAPI(title="ScanKit API")
+app = FastAPI(title=f"{PRODUCT_NAME} API")
 
 
 def redis_unavailable(_request: Request, _exc: Exception) -> JSONResponse:

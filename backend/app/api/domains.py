@@ -80,6 +80,8 @@ class DomainOut(BaseModel):
     # True for hosts like foo.vercel.app, where the owner can't edit DNS.
     shared_platform: bool
     instructions: VerificationInstructions
+    # True when a record or file published under the old scankit-verify names still counts.
+    legacy_names_accepted: bool
     created_at: datetime
 
 
@@ -116,6 +118,7 @@ def _domain_out(domain: Domain) -> DomainOut:
             file_url=verification_file_url(domain.hostname),
             file_content=domain.verify_token,
         ),
+        legacy_names_accepted=domain.accepts_legacy_verify_names,
         created_at=domain.created_at,
     )
 
@@ -184,10 +187,11 @@ def verify_domain(
 ) -> VerifyResult:
     domain = _owned_domain(session, domain_id, viewer.id)
     hostname, token = domain.hostname, domain.verify_token
+    accept_legacy = domain.accepts_legacy_verify_names
     # Ends the transaction, so a database connection isn't held through the network checks.
     session.commit()
 
-    result = prove_ownership(hostname, token)
+    result = prove_ownership(hostname, token, accept_legacy=accept_legacy)
 
     domain = _owned_domain(session, domain_id, viewer.id)
     if result.proven:

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 
 import { Providers } from "@/components/providers";
 import { SiteHeader } from "@/components/site-header";
+import { PRODUCT_NAME } from "@/lib/product";
 
 import "./globals.css";
 
@@ -17,7 +18,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ScanKit",
+  // Pages set only their own part, like "Sign in", and the name is added here.
+  title: { default: PRODUCT_NAME, template: `%s | ${PRODUCT_NAME}` },
   description: "Security checks for websites and GitHub repos.",
 };
 

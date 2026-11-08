@@ -72,7 +72,7 @@ def me(client: TestClient) -> UUID:
 
 
 def prove(monkeypatch: pytest.MonkeyPatch, result: OwnershipResult) -> None:
-    monkeypatch.setattr(domains_api, "prove_ownership", lambda _host, _token: result)
+    monkeypatch.setattr(domains_api, "prove_ownership", lambda _host, _token, **_kwargs: result)
 
 
 def add(client: TestClient, hostname: str = "example.com") -> Any:
@@ -134,10 +134,10 @@ def test_adding_normalizes_and_returns_both_methods(client: TestClient, me: UUID
     assert body["verified"] is False
     token = body["instructions"]["file_content"]
     assert len(token) >= 40
-    assert body["instructions"]["txt_name"] == "_scankit-verify.example.com"
-    assert body["instructions"]["txt_value"] == f"scankit-verify={token}"
+    assert body["instructions"]["txt_name"] == "_gapscan-verify.example.com"
+    assert body["instructions"]["txt_value"] == f"gapscan-verify={token}"
     assert body["instructions"]["file_url"] == (
-        "https://example.com/.well-known/scankit-verify.txt"
+        "https://example.com/.well-known/gapscan-verify.txt"
     )
 
 
@@ -290,6 +290,44 @@ def test_temporary_failure_keeps_verification(
     client.post(f"/api/domains/{domain_id}/verify")
 
     assert load(db_engine, domain_id).verified_at is not None
+
+
+def _capture_proof(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    seen: list[bool] = []
+
+    def fake(_host: str, _token: str, *, accept_legacy: bool = False) -> OwnershipResult:
+        seen.append(accept_legacy)
+        return OwnershipResult(VerificationMethod.DNS)
+
+    monkeypatch.setattr(domains_api, "prove_ownership", fake)
+    return seen
+
+
+def test_new_domains_do_not_accept_the_old_names(
+    client: TestClient, me: UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = _capture_proof(monkeypatch)
+    body = add(client).json()
+
+    client.post(f"/api/domains/{body['id']}/verify")
+
+    assert body["legacy_names_accepted"] is False
+    assert seen == [False]
+
+
+def test_existing_domains_keep_accepting_the_old_names(
+    client: TestClient, db_engine: Engine, me: UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = _capture_proof(monkeypatch)
+    domain_id = seed(db_engine, me)
+    with Session(db_engine) as session:
+        session.get_one(Domain, domain_id).accepts_legacy_verify_names = True
+        session.commit()
+
+    body = client.post(f"/api/domains/{domain_id}/verify").json()
+
+    assert body["domain"]["legacy_names_accepted"] is True
+    assert seen == [True]
 
 
 def test_verify_is_rate_limited(

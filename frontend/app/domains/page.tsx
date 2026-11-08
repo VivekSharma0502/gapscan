@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { DomainsView } from "@/components/domains/domains-view";
 
 export const metadata: Metadata = {
-  title: "My domains | ScanKit",
+  title: "My domains",
   robots: { index: false, follow: false },
 };
 

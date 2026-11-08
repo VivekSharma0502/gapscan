@@ -133,8 +133,9 @@ def _ownership_problem(scan_id: UUID) -> str | None:
         ):
             return _NOT_VERIFIED_REASON
         domain_id, hostname, token = domain.id, domain.hostname, domain.verify_token
+        accept_legacy = domain.accepts_legacy_verify_names
 
-    result = prove_ownership(hostname, token)
+    result = prove_ownership(hostname, token, accept_legacy=accept_legacy)
     if result.proven:
         return None
     if not result.definitely_gone:

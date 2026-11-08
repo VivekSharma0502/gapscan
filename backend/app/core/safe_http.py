@@ -1,6 +1,6 @@
 """SSRF-safe HTTP client. Every outbound request from the backend must go through here.
 
-ScanKit fetches URLs chosen by anonymous users, so without this guard a scan could be
+The scanner fetches URLs chosen by anonymous users, so without this guard a scan could be
 pointed at internal services or cloud metadata endpoints such as 169.254.169.254.
 
 Each hop of a request is validated, resolved, and then connected to by IP, so the address

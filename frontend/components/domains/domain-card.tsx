@@ -92,7 +92,7 @@ function FileMethod({
       <CopyField label="File contents (nothing else)" value={file_content} />
       <p className="text-xs text-pretty text-muted-foreground">
         In most projects, this goes in{" "}
-        <code>public/.well-known/scankit-verify.txt</code>. Then redeploy.
+        <code>public{new URL(file_url).pathname}</code>. Then redeploy.
       </p>
       <FailureNote failure={failure} />
     </section>
@@ -222,6 +222,8 @@ export function DomainCard({ domain }: { domain: Domain }) {
         <p className="text-xs text-pretty text-muted-foreground">
           Keep your DNS record or file in place. We check it again before every
           full scan.
+          {domain.legacy_names_accepted &&
+            " If you set it up with a scankit-verify name, it still works and you don't need to change it."}
         </p>
       )}
 

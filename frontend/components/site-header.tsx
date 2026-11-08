@@ -4,6 +4,7 @@ import { Suspense } from "react";
 
 import { UserMenu } from "@/components/auth/user-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { PRODUCT_NAME } from "@/lib/product";
 
 export function SiteHeader() {
   return (
@@ -14,7 +15,7 @@ export function SiteHeader() {
           className="flex items-center gap-2 text-sm font-semibold tracking-tight"
         >
           <ShieldCheck className="size-4" aria-hidden />
-          ScanKit
+          {PRODUCT_NAME}
         </Link>
         <div className="flex items-center gap-1">
           {/* The menu reads the path, which on a scan page is only known per request. */}

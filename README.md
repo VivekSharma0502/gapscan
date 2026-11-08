@@ -1,8 +1,10 @@
-# ScanKit
+# GapScan
 
 Security checks for websites and GitHub repos, built for students, freelancers and small agencies.
 
 See `PLAN.md` for scope and roadmap, and `CHANGELOG.md` for history.
+
+The product name is set once, in `product.json`. The backend and frontend both read it, and both need the file when deployed. Supabase's sign-in emails are edited in the Supabase dashboard, so a rename needs a manual change there too.
 
 ## Layout
 
@@ -52,7 +54,7 @@ Scan DNS lookups fall back automatically from UDP to TCP, DNS-over-HTTPS and the
 
 Supabase is used for Auth only. App data stays in the local Postgres. Scanning works without this, but sign-in stays off.
 
-1. Open `https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json`. `keys` must not be empty. ScanKit only accepts asymmetric signing keys, so a project on the legacy HS256 secret has to rotate to one first.
+1. Open `https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json`. `keys` must not be empty. GapScan only accepts asymmetric signing keys, so a project on the legacy HS256 secret has to rotate to one first.
 2. In Supabase, go to Authentication → Sign In / Providers → GitHub and copy the Callback URL.
 3. At <https://github.com/settings/developers>, create an OAuth App with homepage `http://localhost:3000` and that callback URL.
 4. Paste its Client ID and a new Client Secret into the same Supabase panel, enable GitHub and save. These two values go nowhere else.

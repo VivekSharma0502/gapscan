@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import { ScanLoading, ScanView } from "@/components/scan/scan-view";
 
 export const metadata: Metadata = {
-  title: "Scan results | ScanKit",
+  title: "Scan results",
   // Security: a report lists a site's weaknesses, so search engines shouldn't index it.
   robots: { index: false, follow: false },
 };

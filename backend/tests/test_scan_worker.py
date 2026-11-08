@@ -126,7 +126,7 @@ def add_full(engine: Engine, owner: UUID, domain_id: UUID | None) -> UUID:
 def proof(monkeypatch: pytest.MonkeyPatch, result: OwnershipResult) -> list[str]:
     calls: list[str] = []
 
-    def prove(hostname: str, _token: str) -> OwnershipResult:
+    def prove(hostname: str, _token: str, **_kwargs: Any) -> OwnershipResult:
         calls.append(hostname)
         return result
 
@@ -281,7 +281,7 @@ def test_quick_scan_sends_no_probes(db_engine: Engine, probe_net: ProbeNet) -> N
 def test_full_scan_failure_is_recorded(
     db_engine: Engine, monkeypatch: pytest.MonkeyPatch, probe_net: ProbeNet
 ) -> None:
-    def boom(_hostname: str, _token: str) -> OwnershipResult:
+    def boom(_hostname: str, _token: str, **_kwargs: Any) -> OwnershipResult:
         raise RuntimeError("unexpected")
 
     monkeypatch.setattr(tasks, "prove_ownership", boom)
@@ -526,6 +526,30 @@ def test_capped_grade_and_reason_are_saved_with_the_uncapped_score(
     scan = load(db_engine, scan_id)
     assert (scan.score, scan.grade) == (75, "F")
     assert scan.grade_cap_reason == "Capped at F: site doesn't offer HTTPS"
+
+
+@pytest.mark.usefixtures("collected", "probe_net")
+@pytest.mark.parametrize("legacy", [True, False])
+def test_recheck_accepts_old_names_only_for_existing_domains(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch, legacy: bool
+) -> None:
+    # Otherwise the rename would unverify every older domain at its next full scan.
+    seen: list[bool] = []
+
+    def prove(_hostname: str, _token: str, *, accept_legacy: bool = False) -> OwnershipResult:
+        seen.append(accept_legacy)
+        return PROVEN
+
+    monkeypatch.setattr(tasks, "prove_ownership", prove)
+    owner = uuid4()
+    domain_id = add_domain(db_engine, owner)
+    with Session(db_engine) as session:
+        session.get_one(Domain, domain_id).accepts_legacy_verify_names = legacy
+        session.commit()
+
+    run_full_scan(str(add_full(db_engine, owner, domain_id)))
+
+    assert seen == [legacy]
 
 
 def test_celery_only_accepts_json() -> None:
