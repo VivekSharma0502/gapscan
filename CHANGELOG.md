@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1b: security header checks
+
+**Added**
+- Checks for missing or permissive CSP, clickjacking protection, X-Content-Type-Options, Referrer-Policy, Permissions-Policy and server version leaks, using MDN Observatory's rules as the reference, with text and platform fixes.
+- CSP checks follow browser behaviour, so a nonce or hash cancels `'unsafe-inline'`, and Report-Only does not count as a policy.
+
 ## 2026-11-08: Phase 1, step 1b: TLS checks
 
 **Added**
