@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1d: frontend foundation
+
+**Added**
+- Dark theme by default with a saved light option, applied before first paint so there is no flash.
+- Severity color tokens, a typed API client and localStorage storage for scan claim tokens.
+- `@tanstack/react-query` for polling, plus the shadcn card, input, tabs and badge components.
+
+**Fixed**
+- `--font-sans` referenced itself, so the Geist font was never applied.
+
+**Security**
+- Claim tokens are never logged or put in a URL. localStorage is readable by XSS, which is acceptable because a token can only claim one anonymous passive scan.
+
 ## 2026-11-08: Phase 1, step 1d: step log and finding count in the scan API
 
 **Added**

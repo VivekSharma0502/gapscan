@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+
+import { Providers } from "@/components/providers";
+import { SiteHeader } from "@/components/site-header";
+
 import "./globals.css";
 
 const geistSans = Geist({
@@ -17,13 +21,27 @@ export const metadata: Metadata = {
   description: "Security checks for websites and GitHub repos.",
 };
 
+// Runs before first paint, so a visitor who chose light never sees a dark flash.
+// A fixed string with no outside input, so it can't be used to inject a script.
+const THEME_SCRIPT = `(function(){try{if(localStorage.getItem("scankit.theme")==="light")document.documentElement.classList.remove("dark")}catch(e){}})()`;
+
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      // The inline script may change the class before React hydrates.
+      suppressHydrationWarning
+      className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
+      <body className="flex min-h-full flex-col">
+        <Providers>
+          <SiteHeader />
+          {children}
+        </Providers>
+      </body>
     </html>
   );
 }
