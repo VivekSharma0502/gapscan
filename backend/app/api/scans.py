@@ -104,6 +104,7 @@ class ScanOut(BaseModel):
     result_status: ScanStatus | None
     score: int | None
     grade: str | None
+    grade_cap_reason: str | None
     score_label: str | None
     incomplete_reason: str | None
     findings: list[FindingOut]
@@ -274,6 +275,7 @@ def get_scan(scan_id: UUID, session: SessionDep, viewer_id: ViewerDep) -> ScanOu
         result_status=scan.result_status,
         score=scan.score,
         grade=scan.grade,
+        grade_cap_reason=scan.grade_cap_reason,
         score_label=scan.score_label,
         incomplete_reason=scan.incomplete_reason,
         findings=[_finding_out(record) for record in shown],

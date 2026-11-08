@@ -128,7 +128,9 @@ def test_expired_certificate_makes_scan_incomplete_but_keeps_findings() -> None:
     assert report.status is ScanStatus.INCOMPLETE
     assert report.incomplete_reason == reason
     assert report.score is None
-    assert report.grade is None
+    # The site can't be read, so there are no points, but a broken connection is still an F.
+    assert report.grade == "F"
+    assert report.grade_cap_reason == "Capped at F: certificate has expired"
     assert report.score_label is None
     assert "tls.cert_expired" in ids(report)
     skipped = {item.check_id: item.reason for item in report.skipped}
@@ -192,7 +194,9 @@ def test_http_only_site_gets_a_real_low_score() -> None:
     assert report.incomplete_reason is None
     assert report.score_label is None
     # no_https 25, CSP 7, clickjacking 7, cookies 7 + 7 + 2, nosniff 2, referrer 2
-    assert (report.score, report.grade) == (41, "D")
+    # The score alone would earn a D, but a site with no HTTPS can't do better than F.
+    assert (report.score, report.grade) == (41, "F")
+    assert report.grade_cap_reason == "Capped at F: site doesn't offer HTTPS"
     assert report.findings[0].check_id == "tls.no_https"
     assert report.findings[0].severity is Severity.CRITICAL
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-08: Grade caps
+
+**Changed**
+- No HTTPS, or an expired or untrusted certificate, now caps the grade at F, and any other critical finding caps it at D, because points alone let a site with a broken connection earn a passing grade. The numeric score is unchanged.
+- A line under the gauge explains a cap when it changed the grade, for example "Capped at F: site doesn't offer HTTPS".
+- A scan stopped by an expired or untrusted certificate now shows an F with no score. It used to show no grade at all, because the site's pages can't be read to calculate a score.
+
+**Added**
+- A `grade_cap_reason` column on `scans`. Run `alembic upgrade head`.
+
 ## 2026-11-08: Merge workflow in CLAUDE.md
 
 **Docs**

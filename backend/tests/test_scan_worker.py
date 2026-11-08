@@ -271,6 +271,29 @@ def test_findings_keep_severity_from_the_report(
     assert record.evidence_masked == "evidence text"
 
 
+def test_capped_grade_and_reason_are_saved_with_the_uncapped_score(
+    db_engine: Engine, collected: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    check_id = "tls.no_https"
+    finding = Finding(
+        check_id=check_id,
+        category=Category.TLS,
+        severity=Severity.CRITICAL,
+        title=CATALOG[check_id].title,
+        evidence="evidence text",
+        fix=CATALOG[check_id].fix,
+    )
+    spec = CheckSpec(check_id, Category.TLS, lambda _ctx: finding, frozenset())
+    monkeypatch.setattr(runner, "all_checks", lambda: [spec])
+    scan_id = add_scan(db_engine)
+
+    run_quick_scan(str(scan_id))
+
+    scan = load(db_engine, scan_id)
+    assert (scan.score, scan.grade) == (75, "F")
+    assert scan.grade_cap_reason == "Capped at F: site doesn't offer HTTPS"
+
+
 def test_celery_only_accepts_json() -> None:
     conf = celery_module.celery_app.conf
     assert conf.task_serializer == "json"

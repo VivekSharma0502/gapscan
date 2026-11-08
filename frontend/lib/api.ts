@@ -50,6 +50,7 @@ export interface Scan {
   result_status: ResultStatus | null;
   score: number | null;
   grade: string | null;
+  grade_cap_reason: string | null;
   score_label: string | null;
   incomplete_reason: string | null;
   findings: Finding[];

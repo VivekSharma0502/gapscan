@@ -35,8 +35,8 @@ function findingsSummary(scan: Scan): string {
 function ScoreSummary({ scan }: { scan: Scan }) {
   const { score, grade, target } = scan;
 
-  // The API sends no score when too little could be checked.
-  if (score === null || grade === null) {
+  // The API sends no grade when too little could be checked to give an honest one.
+  if (grade === null) {
     return (
       <section className="flex flex-col gap-3 rounded-xl bg-card p-6 ring-1 ring-foreground/10">
         <TriangleAlert className="size-5 text-muted-foreground" aria-hidden />
@@ -56,13 +56,25 @@ function ScoreSummary({ scan }: { scan: Scan }) {
 
   return (
     <section className="flex flex-col items-center gap-6 rounded-xl bg-card p-6 ring-1 ring-foreground/10 sm:flex-row sm:gap-8">
-      <ScoreGauge score={score} grade={grade} />
+      <div className="flex w-44 shrink-0 flex-col items-center gap-1">
+        <ScoreGauge score={score} grade={grade} />
+        {scan.grade_cap_reason && (
+          <p className="text-center text-xs text-pretty text-muted-foreground">
+            {scan.grade_cap_reason}
+          </p>
+        )}
+      </div>
       <div className="flex w-full min-w-0 flex-col items-center gap-2 text-center sm:items-start sm:text-left">
-        <p className="text-sm text-muted-foreground">Security score for</p>
+        <p className="text-sm text-muted-foreground">
+          {score === null ? "Security grade for" : "Security score for"}
+        </p>
         <h1 className="max-w-full text-2xl font-semibold tracking-tight wrap-anywhere">
           {target}
         </h1>
         {scan.score_label && <Badge variant="outline">{scan.score_label}</Badge>}
+        {scan.incomplete_reason && (
+          <p className="text-sm text-pretty">{scan.incomplete_reason}</p>
+        )}
         <p className="text-sm text-muted-foreground">{findingsSummary(scan)}</p>
       </div>
     </section>

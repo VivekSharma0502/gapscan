@@ -71,6 +71,7 @@ def _save_report(scan_id: UUID, report: ScanReport, total: int, steps: Sequence[
                 result_status=report.status,
                 score=report.score,
                 grade=report.grade,
+                grade_cap_reason=report.grade_cap_reason,
                 score_label=report.score_label,
                 incomplete_reason=report.incomplete_reason,
                 skipped_json=[item.model_dump() for item in report.skipped],

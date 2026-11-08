@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from app.checks import cms, cookies, dns_email, headers, tls  # noqa: F401
 from app.checks.base import Finding, Input, ScanContext, Severity, SkipCheck, StepCallback
 from app.checks.registry import CheckSpec, all_checks
-from app.checks.scoring import calculate_score, grade_for
+from app.checks.scoring import calculate_score, final_grade
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,10 @@ class ScanReport(BaseModel):
     incomplete_reason: str | None
     # None when the scan is incomplete. A partial score would flatter a broken site.
     score: int | None
+    # None when the scan is incomplete, unless a broken connection already means an F.
     grade: str | None
+    # Set when a serious finding held the grade below what the score earned.
+    grade_cap_reason: str | None
     # Shown next to a partial score, so nobody mistakes it for a full result.
     score_label: str | None
     findings: list[Finding]
@@ -99,25 +102,29 @@ def run_checks(
 
     if ctx.homepage is None:
         reason = ctx.skip_reasons.get(Input.HOMEPAGE, _NO_HOMEPAGE_REASON)
+        grade, grade_cap_reason = final_grade(None, findings)
         return ScanReport(
             hostname=ctx.hostname,
             status=ScanStatus.INCOMPLETE,
             incomplete_reason=reason,
             score=None,
-            grade=None,
+            grade=grade,
+            grade_cap_reason=grade_cap_reason,
             score_label=None,
             findings=findings,
             skipped=skipped,
         )
 
     score = calculate_score(findings)
+    grade, grade_cap_reason = final_grade(score, findings)
     failed_count = sum(1 for item in skipped if not item.not_applicable)
     return ScanReport(
         hostname=ctx.hostname,
         status=ScanStatus.PARTIAL if failed_count else ScanStatus.COMPLETE,
         incomplete_reason=None,
         score=score,
-        grade=grade_for(score),
+        grade=grade,
+        grade_cap_reason=grade_cap_reason,
         score_label=_partial_label(failed_count) if failed_count else None,
         findings=findings,
         skipped=skipped,

@@ -419,6 +419,16 @@ def test_partial_score_keeps_its_label(client: TestClient, db_engine: Engine) ->
     assert body["score_label"] == "Partial — 2 checks skipped"
 
 
+def test_capped_grade_keeps_its_reason_and_score(client: TestClient, db_engine: Engine) -> None:
+    reason = "Capped at F: site doesn't offer HTTPS"
+    scan_id = add_scan(db_engine, score=75, grade="F", grade_cap_reason=reason)
+
+    body = client.get(f"/api/scans/{scan_id}").json()
+
+    assert (body["score"], body["grade"]) == (75, "F")
+    assert body["grade_cap_reason"] == reason
+
+
 def test_progress_is_returned_while_running(client: TestClient, db_engine: Engine) -> None:
     progress = {
         "completed": 1,

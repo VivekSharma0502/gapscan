@@ -81,6 +81,7 @@ class Scan(SQLModel, table=True):
     )
     score: int | None = None
     grade: str | None = Field(default=None, max_length=2)
+    grade_cap_reason: str | None = None
     score_label: str | None = None
     incomplete_reason: str | None = None
     skipped_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))

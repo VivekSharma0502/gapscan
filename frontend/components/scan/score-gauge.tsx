@@ -8,7 +8,14 @@ function arcColor(grade: string): string {
   return "stroke-good";
 }
 
-export function ScoreGauge({ score, grade }: { score: number; grade: string }) {
+// score is null when the site couldn't be read but still earned a grade.
+export function ScoreGauge({
+  score,
+  grade,
+}: {
+  score: number | null;
+  grade: string;
+}) {
   const circle = {
     cx: 60,
     cy: 60,
@@ -24,7 +31,11 @@ export function ScoreGauge({ score, grade }: { score: number; grade: string }) {
   return (
     <div
       role="img"
-      aria-label={`Security score ${score} out of 100, grade ${grade}`}
+      aria-label={
+        score === null
+          ? `Security grade ${grade}, no score`
+          : `Security score ${score} out of 100, grade ${grade}`
+      }
       className="relative size-40 shrink-0"
     >
       <svg viewBox="0 0 120 120" className="size-full" aria-hidden>
@@ -33,19 +44,21 @@ export function ScoreGauge({ score, grade }: { score: number; grade: string }) {
           className="stroke-muted"
           strokeDasharray={`${SWEEP} 100`}
         />
-        <circle
-          {...circle}
-          className={arcColor(grade)}
-          style={{
-            strokeDasharray: `${(score / 100) * SWEEP} 100`,
-            animation: "gauge-fill 900ms ease-out",
-          }}
-        />
+        {score !== null && (
+          <circle
+            {...circle}
+            className={arcColor(grade)}
+            style={{
+              strokeDasharray: `${(score / 100) * SWEEP} 100`,
+              animation: "gauge-fill 900ms ease-out",
+            }}
+          />
+        )}
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span className="text-5xl font-semibold tracking-tight">{grade}</span>
         <span className="mt-1 text-sm text-muted-foreground tabular-nums">
-          {score} / 100
+          {score === null ? "No score" : `${score} / 100`}
         </span>
       </div>
     </div>

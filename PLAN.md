@@ -104,7 +104,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - **domains**: id, owner_id, hostname, verify_token, verified_at, created_at
 - **github_installations**: id, owner_id, installation_id, account_login, created_at
 - **repos**: id, owner_id, installation_id, full_name, is_private, created_at
-- **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, target, mode (quick|full), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
+- **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, target, mode (quick|full), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, grade_cap_reason, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
 - **findings**: id, scan_id, check_id, category, severity (critical|high|medium|low|info), title, evidence_masked, location, linked_finding_id, created_at
 - **scan_claims**: id, scan_id, token_hash, created_at (one per anonymous request, redeemed after signup in Phase 2)
 - **notification_settings**: owner_id, email_enabled, telegram_chat_id, min_severity
@@ -131,6 +131,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 ## Scoring
 Start at 100. Deduct per finding: critical −25, high −15, medium −7, low −2, info 0. Floor 0.
 Grades: A+ ≥95, A ≥85, B ≥70, C ≥55, D ≥40, F <40.
+Grade caps, on top of the points (the numeric score stays as calculated): no HTTPS or an expired/untrusted certificate caps the grade at F, and any other critical finding caps it at D. A scan that couldn't read the site has no score, and gets a grade only when one of the F caps applies.
 
 ## Security rules (non-negotiable)
 - **SSRF guard** on every outbound request: resolve DNS, block private/loopback/link-local/reserved/multicast IPs (v4 + v6), re-check after each redirect, max 5 redirects, timeouts, response size cap
