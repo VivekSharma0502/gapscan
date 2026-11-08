@@ -1,0 +1,147 @@
+# PLAN.md — Security Scanner SaaS (working name: ScanKit — rename later)
+
+## One-liner
+Security check for apps built by students, freelancers and small agencies — website + GitHub repo scanning in one dashboard, plain-language fixes, priced in INR.
+
+## Who it's for
+- Students / indie devs shipping on Firebase, Supabase, Vercel, Netlify
+- Freelancers & small agencies who build sites for clients
+- Small business owners (plain-language reports)
+
+## What makes us different (keep these in every decision)
+1. **BaaS misconfig checks** — open Firebase rules, Supabase tables without RLS, exposed `.env`, public source maps
+2. **Repo ↔ site correlation** — secret/config found in repo → check if the live backend is actually exposed
+3. **Platform-specific fixes** — copy-paste snippets for Vercel / Netlify / nginx / Cloudflare / Firebase / Supabase
+4. **Agency mode** — white-label PDF client reports
+5. **INR pricing** via Razorpay/UPI
+6. **Plain language**, later Hindi + Gujarati
+7. **Embeddable score badge** (growth loop)
+
+Don't reinvent engines: use **gitleaks** for secrets; write our own checks for headers/TLS/DNS (MDN Observatory logic as reference).
+
+---
+
+## Stack
+| Layer | Choice |
+|---|---|
+| Frontend | Next.js (App Router) + TypeScript, Tailwind, shadcn/ui, TanStack Query, react-hook-form + zod, Recharts, Lucide |
+| Backend | FastAPI (Python 3.11+), Pydantic, SQLModel + Alembic, httpx, dnspython |
+| Jobs | Redis + Celery (+ Celery Beat for scheduled rescans) |
+| DB + Auth | Supabase (Postgres + Auth, "Sign in with GitHub"); FastAPI verifies Supabase JWT |
+| Repo scanning | GitHub App + webhooks, gitleaks |
+| Notifications | Resend (email), Telegram Bot API |
+| Reports | WeasyPrint (HTML → PDF) |
+| Payments | Razorpay (Phase 5) |
+| Hosting | Frontend → Vercel · Backend + worker + Redis → Railway/Render or VPS (Docker Compose) · DNS → Cloudflare |
+
+## Repo layout
+```
+/frontend          Next.js app
+/backend
+  /app
+    /api           FastAPI routers
+    /core          config, auth, safe_http (SSRF guard), rate limit
+    /checks        one file per check group (tls.py, headers.py, dns_email.py, exposure.py, cms.py, baas.py)
+    /models        SQLModel tables
+    /workers       Celery app + tasks
+    /reports       PDF templates
+  /tests
+docker-compose.yml (redis, optional local postgres)
+PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
+```
+
+---
+
+## Phases
+
+### Phase 0 — Scaffold (Day 1–2)
+- Monorepo structure above, Next.js + FastAPI hello-world, docker-compose (Redis)
+- `.env.example`, README (setup steps), CHANGELOG, `.gitignore`
+- Health route `GET /api/health`, frontend calls it
+
+### Phase 1 — Web scanner + quick scan (Week 1–2)
+- `safe_http` client with SSRF guard (see Security rules) — **build first, everything uses it**
+- Check registry: each check returns `{check_id, category, severity, title, evidence, fix}`
+- Passive checks (allowed on any domain, quick scan):
+  - TLS: valid cert, days to expiry, TLS version, HTTP→HTTPS redirect, HSTS
+  - Headers: CSP, frame-ancestors/X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, server version leak
+  - Cookies: Secure / HttpOnly / SameSite
+  - DNS/email: SPF, DMARC, CAA
+  - CMS: WordPress version detection
+- Score + grade (see Scoring)
+- Landing page: enter domain → live progress (poll scan status) → teaser results (top 3 + score) → "sign up for full report"
+- Findings UI: grouped by severity, each with *What it means* + *How to fix* (tabs per platform)
+
+### Phase 2 — Accounts + verified domains (Week 2–3)
+- Supabase Auth (GitHub login + email)
+- Add domain → DNS TXT token `scankit-verify=<token>` → verify
+- Active checks (**verified domains only**): `/.env`, `/.git/HEAD`, `.DS_Store`, backup files, source maps, directory listing
+- Dashboard: domains, latest score, score history chart, scan history
+
+### Phase 3 — Repos + BaaS + correlation (Week 3–4)
+- GitHub App: install → list repos → scan with gitleaks; webhook on `push` scans new commits
+- Store only masked secrets (`AKIA****XYZ`) + file/line/commit
+- BaaS checks (verified domains only):
+  - Firebase config in JS bundle → RTDB `/.json` readable? Firestore/Storage rules open?
+  - Supabase URL + anon key in bundle → tables readable without RLS?
+- Correlation: repo finding mentions a project/domain the user owns → link findings, raise severity if live exposure confirmed
+
+### Phase 4 — Monitoring + reports (Week 5)
+- Celery Beat scheduled rescans (weekly free / daily paid)
+- Alerts on new High/Critical + SSL/domain expiry (email, Telegram)
+- PDF report (client-ready)
+- Badge `GET /api/badge/{domain}.svg`
+
+### Phase 5 — Monetize + polish (later)
+- Razorpay plans, agency white-label (logo/name on PDF), Hindi/Gujarati report text, team members
+
+---
+
+## Database (draft)
+- **profiles**: id (= Supabase uid), email, name, plan, created_at
+- **domains**: id, owner_id, hostname, verify_token, verified_at, created_at
+- **github_installations**: id, owner_id, installation_id, account_login, created_at
+- **repos**: id, owner_id, installation_id, full_name, is_private, created_at
+- **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, target, mode (quick|full), status (queued|running|done|failed), progress_json, score, grade, started_at, finished_at
+- **findings**: id, scan_id, check_id, category, severity (critical|high|medium|low|info), title, evidence_masked, location, linked_finding_id, created_at
+- **notification_settings**: owner_id, email_enabled, telegram_chat_id, min_severity
+- Check text (what it means / fixes per platform) lives in code, keyed by `check_id`.
+
+## API (draft)
+| Method | Route | Notes |
+|---|---|---|
+| GET | /api/health | |
+| POST | /api/scans/quick | anonymous, rate-limited, passive checks only |
+| GET | /api/scans/{id} | status + progress + findings (teaser if anonymous) |
+| GET | /api/domains | auth |
+| POST | /api/domains | returns TXT token |
+| POST | /api/domains/{id}/verify | DNS TXT lookup |
+| POST | /api/domains/{id}/scan | full scan, verified only |
+| GET | /api/repos | auth |
+| POST | /api/repos/{id}/scan | auth |
+| POST | /api/github/webhook | verify `X-Hub-Signature-256` |
+| GET | /api/dashboard | scores summary |
+| GET | /api/scans/{id}/report.pdf | auth |
+| PUT | /api/settings/notifications | auth |
+| GET | /api/badge/{domain}.svg | public |
+
+## Scoring
+Start at 100. Deduct per finding: critical −25, high −15, medium −7, low −2, info 0. Floor 0.
+Grades: A+ ≥95, A ≥85, B ≥70, C ≥55, D ≥40, F <40.
+
+## Security rules (non-negotiable)
+- **SSRF guard** on every outbound request: resolve DNS, block private/loopback/link-local/reserved/multicast IPs (v4 + v6), re-check after each redirect, max 5 redirects, timeouts, response size cap
+- **Ownership** required for active + BaaS checks (DNS TXT for domains, GitHub App install for repos)
+- **Rate limiting** (slowapi) — strict on `/api/scans/quick`
+- Never store or log full secrets; mask everything
+- GitHub App private key in env only; use short-lived installation tokens, don't store user tokens
+- Verify webhook signatures; validate all input with Pydantic; locked-down CORS
+- Scanner sends an honest User-Agent with a link to an "about our scanner" page
+
+## Pricing (draft, Phase 5)
+- Free: 1 domain, 3 repos, weekly rescans
+- Pro ₹299/mo: 5 domains, unlimited repos, daily rescans, alerts, PDF
+- Agency ₹999/mo: 25 domains, white-label reports
+
+## Validate early
+After Phase 1: run free reports for 5 local businesses / student projects, collect feedback before building payments.
