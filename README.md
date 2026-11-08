@@ -65,7 +65,7 @@ cd frontend
 npm run dev
 ```
 
-Open http://localhost:3000. The page should show **API status: OK**.
+Open http://localhost:3000 and enter a domain to run a quick scan.
 
 The worker runs the scans, so without it they stay queued and are marked failed after 5 minutes. `--pool=solo` is required on Windows, where Celery's default pool doesn't work, and runs one scan at a time. Restart the worker after changing its code, because it doesn't reload.
 

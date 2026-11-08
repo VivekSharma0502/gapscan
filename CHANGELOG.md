@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1d: landing page
+
+**Added**
+- Landing page with a domain form that starts a quick scan, saves its claim token and opens the scan's page. It replaces the Phase 0 health check page.
+- Inline messages for invalid domains, rate limits and outages, using the three error shapes the API returns.
+
+**Security**
+- The form only rejects empty input. The API alone decides what can be scanned, so the SSRF rules live in one place.
+
 ## 2026-11-08: Phase 1, step 1d: frontend foundation
 
 **Added**
