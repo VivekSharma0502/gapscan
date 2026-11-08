@@ -1,0 +1,96 @@
+"""Runs every registered check against a ScanContext and builds the report."""
+
+import logging
+from enum import StrEnum
+
+from pydantic import BaseModel
+
+# Imported for their side effect: each module registers its checks with the registry.
+from app.checks import cms, cookies, dns_email, headers, tls  # noqa: F401
+from app.checks.base import Finding, Input, ScanContext, Severity, SkipCheck
+from app.checks.registry import CheckSpec, all_checks
+from app.checks.scoring import calculate_score, grade_for
+
+logger = logging.getLogger(__name__)
+
+_SEVERITY_ORDER = list(Severity)
+_NOT_COLLECTED_REASON = "This information could not be collected."
+_CHECK_FAILED_REASON = "This check could not be completed."
+_NO_HOMEPAGE_REASON = "We could not read the site's homepage."
+
+
+class ScanStatus(StrEnum):
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+
+
+class SkippedCheck(BaseModel):
+    check_id: str
+    reason: str
+
+
+class ScanReport(BaseModel):
+    hostname: str
+    status: ScanStatus
+    incomplete_reason: str | None
+    # None when the scan is incomplete. A partial score would flatter a broken site.
+    score: int | None
+    grade: str | None
+    findings: list[Finding]
+    skipped: list[SkippedCheck]
+
+
+def _missing_input_reason(spec: CheckSpec, ctx: ScanContext) -> str | None:
+    for needed in sorted(spec.requires):
+        if getattr(ctx, needed.value) is None:
+            return ctx.skip_reasons.get(needed, _NOT_COLLECTED_REASON)
+    return None
+
+
+def run_checks(ctx: ScanContext) -> ScanReport:
+    findings: list[Finding] = []
+    skipped: list[SkippedCheck] = []
+
+    for spec in all_checks():
+        reason = _missing_input_reason(spec, ctx)
+        if reason is not None:
+            skipped.append(SkippedCheck(check_id=spec.check_id, reason=reason))
+            continue
+        try:
+            finding = spec.func(ctx)
+        except SkipCheck as exc:
+            skipped.append(SkippedCheck(check_id=spec.check_id, reason=str(exc)))
+            continue
+        except Exception as exc:
+            # A site's odd response must not lose the whole report. Security: only the
+            # error type is logged, since the message could echo the site's content.
+            logger.error("check %s failed: %s", spec.check_id, type(exc).__name__)
+            skipped.append(SkippedCheck(check_id=spec.check_id, reason=_CHECK_FAILED_REASON))
+            continue
+        if finding is not None:
+            findings.append(finding)
+
+    findings.sort(key=lambda item: (_SEVERITY_ORDER.index(item.severity), item.check_id))
+
+    if ctx.https is None:
+        reason = ctx.skip_reasons.get(Input.HTTPS, _NO_HOMEPAGE_REASON)
+        return ScanReport(
+            hostname=ctx.hostname,
+            status=ScanStatus.INCOMPLETE,
+            incomplete_reason=reason,
+            score=None,
+            grade=None,
+            findings=findings,
+            skipped=skipped,
+        )
+
+    score = calculate_score(findings)
+    return ScanReport(
+        hostname=ctx.hostname,
+        status=ScanStatus.COMPLETE,
+        incomplete_reason=None,
+        score=score,
+        grade=grade_for(score),
+        findings=findings,
+        skipped=skipped,
+    )

@@ -41,7 +41,7 @@ Don't reinvent engines: use **gitleaks** for secrets; write our own checks for h
   /app
     /api           FastAPI routers
     /core          config, auth, safe_http (SSRF guard), rate limit
-    /checks        one file per check group (tls.py, headers.py, dns_email.py, exposure.py, cms.py, baas.py)
+    /checks        one file per check group (tls.py, headers.py, cookies.py, dns_email.py, exposure.py, cms.py, baas.py)
     /models        SQLModel tables
     /workers       Celery app + tasks
     /reports       PDF templates

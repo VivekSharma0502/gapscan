@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1b: collector and scan report
+
+**Added**
+- `collect_context` gathers TLS, homepage, HTTP and DNS data through `safe_http`. One failed input doesn't stop the scan.
+- `run_checks` builds the report: findings sorted by severity, score, grade, and a list of skipped checks with reasons.
+- If the homepage can't be fetched over HTTPS, the scan is marked `incomplete` with a clear reason and gets no score or grade, because a partial score would flatter a broken site. Findings that did run are still shown.
+
+**Changed**
+- `PLAN.md` file list now includes `cookies.py`.
+
+**Security**
+- A blocked target stops the collector immediately, so it gets no further requests or lookups.
+- A check that crashes on odd input is reported as skipped, and only the error type is logged, since the message could echo the site's content.
+
 ## 2026-11-08: Phase 1, step 1b: WordPress version check
 
 **Added**
