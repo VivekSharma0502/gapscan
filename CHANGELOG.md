@@ -2,6 +2,20 @@
 
 ## 2026-11-09: Phase 2, step 2c: dashboard and rename to GapScan
 
+**Added**
+- `GET /api/dashboard`: each domain's latest grade and score, last scan and change from the previous scan, plus the 10 most recent scans, including claimed anonymous ones.
+- `GET /api/domains/{id}/scans`: a domain's full scans, newest first, paginated, with `scored_only` for charts. Someone else's domain returns 404.
+- Three indexes for these reads. The owner-only index on `scans` is replaced by one that also covers its date order. `alembic upgrade head` applies them.
+
+**Security**
+- Lists return summaries only, with no findings or evidence, and the dashboard doesn't return verification tokens.
+- Full scans stay owner-only in every list, even if a claim row points at one.
+
+**Decisions**
+- Verified domains are graded from full scans only, because a quick scan runs fewer checks and mixing them would show false score changes. Unverified domains show their latest quick scan, labelled as such.
+- No trend is shown when either scan is partial, because skipped checks can inflate a score.
+- A scan stuck past the 5-minute limit is listed as failed without the read writing anything.
+
 **Changed**
 - The product is now GapScan. The name is set once, in `product.json`, and the backend and frontend both read it, so a future rename is a one-line change. A build or startup without the file fails rather than showing an old name.
 - New domains publish `_gapscan-verify` and `gapscan-verify.txt`. Domains that existed before the rename keep accepting the `scankit-verify` names as well, tracked per domain, so nobody's verification breaks and the old names retire on their own. Run `alembic upgrade head`, and restart the worker.

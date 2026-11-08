@@ -2,14 +2,22 @@
 
 import secrets
 from datetime import datetime, timedelta
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from app.api.scans import SessionDep, SignedInDep, enqueue_scan, lock_target
+from app.api.scans import (
+    ScanSummary,
+    SessionDep,
+    SignedInDep,
+    enqueue_scan,
+    lock_target,
+    scan_summary,
+)
 from app.checks.domains import registrable_domain, shared_platform_suffix
 from app.checks.ownership import (
     FailureCode,
@@ -42,6 +50,9 @@ ADD_RATE_LIMIT = "10/minute"
 VERIFY_RATE_LIMIT = "10/minute"
 SCAN_RATE_LIMIT = "5/minute"
 HOURLY_FULL_SCAN_CAP = 10
+DEFAULT_SCANS_PER_PAGE = 20
+MAX_SCANS_PER_PAGE = 100
+MAX_SCANS_OFFSET = 100_000
 
 _INVALID_HOSTNAME = "Enter a public domain name, like example.com."
 
@@ -102,6 +113,13 @@ class FullScanCreated(BaseModel):
     status: ScanJobStatus
     # True when a full scan of this domain was already running.
     reused: bool
+
+
+class ScanPage(BaseModel):
+    items: list[ScanSummary]
+    total: int
+    limit: int
+    offset: int
 
 
 def _domain_out(domain: Domain) -> DomainOut:
@@ -207,6 +225,41 @@ def verify_domain(
             VerifyFailure(method=item.method, code=item.code, message=item.message)
             for item in result.failures
         ],
+    )
+
+
+@router.get("/{domain_id}/scans", response_model=ScanPage)
+def list_domain_scans(
+    domain_id: UUID,
+    session: SessionDep,
+    viewer: SignedInDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_SCANS_PER_PAGE)] = DEFAULT_SCANS_PER_PAGE,
+    # Capped so a huge number can't reach the database as an out-of-range value.
+    offset: Annotated[int, Query(ge=0, le=MAX_SCANS_OFFSET)] = 0,
+    scored_only: bool = False,
+) -> ScanPage:
+    _owned_domain(session, domain_id, viewer.id)
+    # Security: owner_id is checked as well as the domain, so a scan can only be listed for
+    # the person who ran it, whatever a domain_id says.
+    conditions = [
+        Scan.domain_id == domain_id,
+        Scan.owner_id == viewer.id,
+        Scan.mode == ScanMode.FULL,
+    ]
+    if scored_only:
+        conditions += [Scan.status == ScanJobStatus.DONE, Scan.score.is_not(None)]
+
+    total = session.exec(select(func.count()).select_from(Scan).where(*conditions)).one()
+    scans = session.exec(
+        select(Scan)
+        .where(*conditions)
+        .order_by(Scan.created_at.desc(), Scan.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    now = utc_now()
+    return ScanPage(
+        items=[scan_summary(scan, now) for scan in scans], total=total, limit=limit, offset=offset
     )
 
 

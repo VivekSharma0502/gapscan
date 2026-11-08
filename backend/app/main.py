@@ -5,6 +5,7 @@ from redis.exceptions import RedisError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from app.api.dashboard import router as dashboard_router
 from app.api.domains import router as domains_router
 from app.api.health import router as health_router
 from app.api.scans import router as scans_router
@@ -41,3 +42,4 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(scans_router)
 app.include_router(domains_router)
+app.include_router(dashboard_router)

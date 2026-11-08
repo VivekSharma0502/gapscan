@@ -3,14 +3,14 @@
 import hashlib
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from kombu.exceptions import OperationalError
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
-from sqlalchemy import and_, func, or_
+from sqlalchemy import ColumnElement, and_, func, or_
 from sqlmodel import Session, select, update
 
 from app.checks.base import Category, Fix, Severity
@@ -133,6 +133,54 @@ class ScanOut(BaseModel):
     skipped: list[SkippedCheck]
     # True when findings are cut to the top few, so the UI can offer the full report.
     teaser: bool
+
+
+class ScanSummary(BaseModel):
+    # Security: a row in a list, with no findings or evidence, so a list can't leak any.
+    id: UUID
+    target: str
+    mode: ScanMode
+    status: ScanJobStatus
+    result_status: ScanStatus | None
+    score: int | None
+    grade: str | None
+    score_label: str | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
+def scan_summary(scan: Scan, now: datetime) -> ScanSummary:
+    # SQLite, used in tests, hands back timestamps without their timezone.
+    created_at = scan.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    # A list is read-only, so a scan that lost its worker is reported as failed without
+    # being saved as failed. Otherwise it would show as running forever.
+    stale = scan.status in UNFINISHED_STATUSES and created_at < now - SCAN_STALE_AFTER
+    return ScanSummary(
+        id=scan.id,
+        target=scan.target,
+        mode=scan.mode,
+        status=ScanJobStatus.FAILED if stale else scan.status,
+        result_status=scan.result_status,
+        score=scan.score,
+        grade=scan.grade,
+        score_label=scan.score_label,
+        created_at=scan.created_at,
+        finished_at=scan.finished_at,
+    )
+
+
+def readable_by(viewer_id: UUID) -> ColumnElement[bool]:
+    # Security: matches _has_full_access, as a query. EXISTS rather than a join, because one
+    # scan can have several claim rows and a join would list it once for each.
+    held = (
+        select(ScanClaim.id)
+        .where(ScanClaim.scan_id == Scan.id, ScanClaim.claimed_by == viewer_id)
+        .exists()
+    )
+    # Claims are only ever issued for quick scans. Full scans stay owner-only regardless.
+    return or_(Scan.owner_id == viewer_id, and_(Scan.mode == ScanMode.QUICK, held))
 
 
 def lock_target(session: Session, hostname: str) -> None:

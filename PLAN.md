@@ -125,7 +125,8 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 | GET | /api/repos | auth |
 | POST | /api/repos/{id}/scan | auth |
 | POST | /api/github/webhook | verify `X-Hub-Signature-256` |
-| GET | /api/dashboard | scores summary |
+| GET | /api/dashboard | auth. Per-domain standing and trend, plus recent scans |
+| GET | /api/domains/{id}/scans | auth, owner only. Full scans, paginated (`limit`, `offset`, `scored_only`) |
 | GET | /api/scans/{id}/report.pdf | auth |
 | PUT | /api/settings/notifications | auth |
 | GET | /api/badge/{domain}.svg | public |

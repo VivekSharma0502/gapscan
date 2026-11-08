@@ -60,7 +60,12 @@ def _timestamp_column(*, nullable: bool = False) -> Column[Any]:
 class Scan(SQLModel, table=True):
     __tablename__ = "scans"
     # Serves the per-hostname reuse window and hourly cap on every quick scan request.
-    __table_args__ = (Index("ix_scans_target_mode_created_at", "target", "mode", "created_at"),)
+    # The other two serve the dashboard's per-domain history and recent scans, newest first.
+    __table_args__ = (
+        Index("ix_scans_target_mode_created_at", "target", "mode", "created_at"),
+        Index("ix_scans_domain_id_created_at", "domain_id", "created_at"),
+        Index("ix_scans_owner_id_created_at", "owner_id", "created_at"),
+    )
 
     # Security: a random UUID, because anyone holding the id can read the scan's teaser.
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -68,9 +73,7 @@ class Scan(SQLModel, table=True):
     # can also hold a redeemed ScanClaim for it. Repos arrive in a later step.
     owner_id: UUID | None = Field(
         default=None,
-        sa_column=Column(
-            Uuid, ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True, index=True
-        ),
+        sa_column=Column(Uuid, ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True),
     )
     # Cleared if the domain is deleted, so its owner keeps the report.
     domain_id: UUID | None = Field(
@@ -147,6 +150,8 @@ class ScanClaim(SQLModel, table=True):
     # is how several people can hold a report for one shared scan.
     claimed_by: UUID | None = Field(
         default=None,
-        sa_column=Column(Uuid, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=True),
+        sa_column=Column(
+            Uuid, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=True, index=True
+        ),
     )
     claimed_at: datetime | None = Field(default=None, sa_column=_timestamp_column(nullable=True))
