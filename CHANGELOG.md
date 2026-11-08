@@ -7,6 +7,7 @@
 - The API verifies Supabase access tokens against the project's public keys. Only ES256 and RS256 are accepted, so unsigned tokens and algorithm confusion are refused, and the backend holds no Supabase secret. A legacy HS256 project is not supported and must rotate to asymmetric signing keys.
 - A `profiles` table, created from the verified token on write routes so that polling a scan stays read-only.
 - `POST /api/scans/claim`, which attaches anonymous scans to the signed-in user. Signing up now redeems the tokens saved in the browser and opens the full report.
+- The sign-in error page names what failed: a GitHub failure says to try again, and only a magic link failure explains that links expire. The provider's own error text is logged to the console in development and never shown on the page, because anyone can craft that URL.
 - New dependencies: `PyJWT[crypto]` and `@supabase/supabase-js`.
 - `profiles`, `scan_claims.claimed_by` and `claimed_at`, and a foreign key on `scans.owner_id`. Run `alembic upgrade head`, and add the new values from `.env.example`.
 

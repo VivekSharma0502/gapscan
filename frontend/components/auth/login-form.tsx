@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   authCallbackUrl,
-  rememberNextPath,
+  rememberSignIn,
   safeNextPath,
 } from "@/lib/auth-redirect";
 import { getSupabase, isAuthConfigured } from "@/lib/supabase";
@@ -40,7 +40,7 @@ export function LoginForm() {
     if (!supabase || busy) return;
     setError(null);
     setStatus("github");
-    rememberNextPath(next);
+    rememberSignIn(next, "github");
     // No extra scopes: login needs an identity, and repo access is the GitHub App's job.
     const { error: failure } = await supabase.auth.signInWithOAuth({
       provider: "github",
@@ -59,7 +59,7 @@ export function LoginForm() {
     if (!supabase || busy || !address) return;
     setError(null);
     setStatus("email");
-    rememberNextPath(next);
+    rememberSignIn(next, "email");
     const { error: failure } = await supabase.auth.signInWithOtp({
       email: address,
       options: { emailRedirectTo: authCallbackUrl() },
