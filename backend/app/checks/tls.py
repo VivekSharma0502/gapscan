@@ -2,7 +2,15 @@
 
 import re
 
-from app.checks.base import Category, Finding, Input, ScanContext, Severity, SkipCheck
+from app.checks.base import (
+    Category,
+    Finding,
+    Input,
+    ScanContext,
+    Severity,
+    SkipCheck,
+    shows_real_page,
+)
 from app.checks.registry import check, make_finding
 from app.core.safe_http import TlsStatus
 
@@ -13,15 +21,25 @@ HSTS_MIN_SECONDS = 15_768_000  # six months, the minimum MDN Observatory accepts
 _MAX_AGE_RE = re.compile(r"(?:^|;)\s*max-age\s*=\s*\"?(\d+)\"?", re.IGNORECASE)
 
 
-@check("tls.no_https", Category.TLS, requires=[Input.TLS, Input.HTTP])
-def no_https(ctx: ScanContext) -> Finding | None:
-    # HTTP is required so a site that is simply down isn't reported as lacking HTTPS. A
-    # server that only speaks old TLS does have HTTPS, and tls.legacy_version reports it.
-    if (
-        ctx.tls.status is TlsStatus.NO_HTTPS
+def _has_no_tls(ctx: ScanContext) -> bool:
+    # A server that only speaks old TLS does have HTTPS, and tls.legacy_version reports it.
+    return (
+        ctx.tls is not None
+        and ctx.tls.status is TlsStatus.NO_HTTPS
         and ctx.tls.legacy_accepted is not True
-        and ctx.http.status_code < 400
-    ):
+    )
+
+
+@check("tls.no_https", Category.TLS, requires=[Input.TLS])
+def no_https(ctx: ScanContext) -> Finding | None:
+    if not _has_no_tls(ctx):
+        return None
+    if ctx.http is None:
+        # Without a working HTTP response the site may simply be down.
+        raise SkipCheck(ctx.skip_reasons.get(Input.HTTP, "We could not load the site over HTTP."))
+    # A redirect to https:// means this name has a secure route after all, for example
+    # when only www has a certificate.
+    if ctx.http.url.startswith("http://") and shows_real_page(ctx.http.status_code):
         return make_finding(
             "tls.no_https", Severity.CRITICAL, f"{ctx.hostname}: {ctx.tls.detail}, HTTP works"
         )
@@ -64,6 +82,8 @@ def cert_expiring(ctx: ScanContext) -> Finding | None:
 @check("tls.legacy_version", Category.TLS, requires=[Input.TLS])
 def legacy_version(ctx: ScanContext) -> Finding | None:
     if ctx.tls.legacy_accepted is None:
+        if _has_no_tls(ctx):
+            return None  # there is no TLS to test, and tls.no_https covers that
         raise SkipCheck("We could not test whether old TLS versions are accepted.")
     if ctx.tls.legacy_accepted:
         return make_finding("tls.legacy_version", Severity.MEDIUM, "Accepted TLS 1.0 or TLS 1.1")
@@ -72,6 +92,10 @@ def legacy_version(ctx: ScanContext) -> Finding | None:
 
 @check("tls.no_http_redirect", Category.TLS, requires=[Input.HTTP])
 def no_http_redirect(ctx: ScanContext) -> Finding | None:
+    # With no HTTPS there is nowhere to redirect to. tls.no_https reports that once, so the
+    # same problem isn't charged twice.
+    if _has_no_tls(ctx):
+        return None
     # An error page on HTTP isn't serving the site unencrypted, so it isn't flagged.
     if ctx.http.url.startswith("http://") and ctx.http.status_code < 400:
         return make_finding(

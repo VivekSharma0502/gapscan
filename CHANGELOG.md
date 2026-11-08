@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1b: fairer scan outcomes
+
+**Fixed**
+- HTTP-only sites are no longer incomplete. Header, cookie and WordPress checks run on the HTTP homepage, `tls.no_https` stays critical, and the site gets a real score. HSTS and the HTTP redirect check don't apply without HTTPS, so they are left out and the same problem isn't charged twice.
+- A homepage returning 403, 429 or 503 stays incomplete, with a reason saying bot protection or a firewall blocked the scan. Other 4xx responses such as 401 and 404 come from the real app, so checks now run on them. Other 5xx responses stay incomplete with a generic reason.
+- `tls.no_https` is no longer reported when HTTP redirects to a secure host, for example when only `www` has a certificate.
+
+**Added**
+- A `partial` scan status with a `score_label` such as "Partial — 3 checks skipped", for scans where a DNS or TLS lookup failed, so a possibly generous grade is labelled. Checks skipped by design, such as SPF on `*.vercel.app`, don't count.
+
 ## 2026-11-08: Phase 1, step 1b: collector and scan report
 
 **Added**

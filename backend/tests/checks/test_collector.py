@@ -119,9 +119,10 @@ def test_tls_problem_explains_unreachable_homepage(
 ) -> None:
     scanner.tls = probe
     scanner.https = RequestFailedError("request failed")
+    scanner.http = RequestFailedError("request failed")
     ctx = collect_context("example.com")
-    assert ctx.https is None
-    assert ctx.skip_reasons[Input.HTTPS] == expected
+    assert ctx.homepage is None
+    assert ctx.skip_reasons[Input.HOMEPAGE] == expected
 
 
 @pytest.mark.parametrize(
@@ -139,12 +140,98 @@ def test_request_errors_explain_unreachable_homepage(
     assert collect_context("example.com").skip_reasons[Input.HTTPS] == expected
 
 
-@pytest.mark.parametrize("status", [401, 403, 404, 429, 500, 503])
-def test_error_pages_are_not_treated_as_the_homepage(scanner: FakeScanner, status: int) -> None:
+@pytest.mark.parametrize("status", [403, 429, 503])
+def test_blocked_homepage_says_so(scanner: FakeScanner, status: int) -> None:
     scanner.https = response(status=status)
     ctx = collect_context("example.com")
+    assert ctx.homepage is None
+    reason = ctx.skip_reasons[Input.HOMEPAGE]
+    assert "bot protection" in reason
+    assert "Cloudflare" in reason
+    assert f"HTTP {status}" in reason
+
+
+@pytest.mark.parametrize("status", [400, 401, 404, 410])
+def test_other_client_errors_still_show_real_headers(scanner: FakeScanner, status: int) -> None:
+    scanner.https = response(status=status)
+    ctx = collect_context("example.com")
+    assert ctx.homepage is scanner.https
+    assert Input.HOMEPAGE not in ctx.skip_reasons
+
+
+@pytest.mark.parametrize("status", [500, 502, 504])
+def test_server_errors_are_not_treated_as_the_homepage(scanner: FakeScanner, status: int) -> None:
+    scanner.https = response(status=status)
+    ctx = collect_context("example.com")
+    assert ctx.homepage is None
+    reason = ctx.skip_reasons[Input.HOMEPAGE]
+    assert f"HTTP {status}" in reason
+    assert "bot protection" not in reason
+
+
+NO_HTTPS = TlsProbe(TlsStatus.NO_HTTPS, "port 443 refused the connection")
+
+
+def http_only(scanner: FakeScanner, status: int = 200) -> None:
+    scanner.tls = NO_HTTPS
+    scanner.https = RequestFailedError("request failed")
+    scanner.http = response(url="http://example.com/", status=status)
+
+
+def test_http_only_site_uses_the_http_homepage(scanner: FakeScanner) -> None:
+    http_only(scanner)
+    ctx = collect_context("example.com")
     assert ctx.https is None
-    assert f"HTTP {status}" in ctx.skip_reasons[Input.HTTPS]
+    assert ctx.homepage is scanner.http
+    assert ctx.homepage_via_http is True
+    assert Input.HOMEPAGE not in ctx.skip_reasons
+    assert Input.HTTPS in ctx.not_applicable
+    assert "HSTS" in ctx.skip_reasons[Input.HTTPS]
+
+
+def test_http_only_404_still_counts_as_the_homepage(scanner: FakeScanner) -> None:
+    http_only(scanner, status=404)
+    assert collect_context("example.com").homepage is scanner.http
+
+
+@pytest.mark.parametrize("status", [403, 429, 503])
+def test_http_only_but_blocked_is_incomplete(scanner: FakeScanner, status: int) -> None:
+    http_only(scanner, status=status)
+    ctx = collect_context("example.com")
+    assert ctx.homepage is None
+    assert "bot protection" in ctx.skip_reasons[Input.HOMEPAGE]
+
+
+@pytest.mark.parametrize(
+    "probe",
+    [
+        RequestFailedError("TLS probe failed"),
+        TlsProbe(TlsStatus.EXPIRED, "the certificate has expired"),
+        TlsProbe(TlsStatus.UNTRUSTED, "the certificate is self-signed"),
+        TlsProbe(TlsStatus.NO_HTTPS, "old", legacy_accepted=True),
+    ],
+)
+def test_http_is_only_used_when_https_definitely_does_not_exist(
+    scanner: FakeScanner, probe: object
+) -> None:
+    scanner.tls = probe
+    scanner.https = RequestFailedError("request failed")
+    scanner.http = response(url="http://example.com/")
+    ctx = collect_context("example.com")
+    assert ctx.homepage is None
+    assert ctx.homepage_via_http is False
+    assert Input.HTTPS not in ctx.not_applicable
+
+
+def test_dns_failure_is_not_marked_not_applicable(scanner: FakeScanner) -> None:
+    scanner.dns[("example.com", "TXT")] = RequestFailedError("DNS lookup failed")
+    assert collect_context("example.com").not_applicable == frozenset()
+
+
+@pytest.mark.parametrize("host", ["foo.vercel.app", "93.184.216.34"])
+def test_dns_skipped_by_design_is_marked_not_applicable(scanner: FakeScanner, host: str) -> None:
+    ctx = collect_context(host)
+    assert {Input.SPF, Input.DMARC, Input.CAA} <= ctx.not_applicable
 
 
 def test_tls_timeout_is_skipped_and_scan_continues(scanner: FakeScanner) -> None:

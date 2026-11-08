@@ -26,10 +26,10 @@ class _GeneratorParser(HTMLParser):
             self.generators.append(values.get("content", ""))
 
 
-@check("cms.wordpress_version", Category.CMS, requires=[Input.HTTPS])
+@check("cms.wordpress_version", Category.CMS, requires=[Input.HOMEPAGE])
 def wordpress_version(ctx: ScanContext) -> Finding | None:
     parser = _GeneratorParser()
-    parser.feed(ctx.https.content[:MAX_HTML_BYTES].decode("utf-8", "replace"))
+    parser.feed(ctx.homepage.content[:MAX_HTML_BYTES].decode("utf-8", "replace"))
     for generator in parser.generators:
         match = _WORDPRESS_RE.search(generator)
         if match:

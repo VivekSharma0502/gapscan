@@ -44,7 +44,7 @@ def _is_deletion(cookie: _Cookie) -> bool:
 
 
 def _cookies(ctx: ScanContext) -> list[_Cookie]:
-    parsed = [_parse(header) for header in ctx.https.headers.get_list("set-cookie")]
+    parsed = [_parse(header) for header in ctx.homepage.headers.get_list("set-cookie")]
     return [cookie for cookie in parsed if cookie.name and not _is_deletion(cookie)]
 
 
@@ -55,7 +55,7 @@ def _names(cookies: list[_Cookie]) -> str:
     return f"{', '.join(names[:MAX_NAMES_LISTED])} and {len(names) - MAX_NAMES_LISTED} more"
 
 
-@check("cookies.secure", Category.COOKIES, requires=[Input.HTTPS])
+@check("cookies.secure", Category.COOKIES, requires=[Input.HOMEPAGE])
 def secure(ctx: ScanContext) -> Finding | None:
     affected = [cookie for cookie in _cookies(ctx) if "secure" not in cookie.attributes]
     if not affected:
@@ -63,7 +63,7 @@ def secure(ctx: ScanContext) -> Finding | None:
     return make_finding("cookies.secure", Severity.MEDIUM, f"Missing Secure: {_names(affected)}")
 
 
-@check("cookies.httponly", Category.COOKIES, requires=[Input.HTTPS])
+@check("cookies.httponly", Category.COOKIES, requires=[Input.HOMEPAGE])
 def httponly(ctx: ScanContext) -> Finding | None:
     # Only session-like cookies are flagged, because many harmless cookies, such as a
     # theme preference, are meant to be readable by the site's own scripts.
@@ -89,7 +89,7 @@ def _samesite_problem(cookie: _Cookie) -> bool:
     return not (value == "none" and "secure" in cookie.attributes)
 
 
-@check("cookies.samesite", Category.COOKIES, requires=[Input.HTTPS])
+@check("cookies.samesite", Category.COOKIES, requires=[Input.HOMEPAGE])
 def samesite(ctx: ScanContext) -> Finding | None:
     affected = [cookie for cookie in _cookies(ctx) if _samesite_problem(cookie)]
     if not affected:

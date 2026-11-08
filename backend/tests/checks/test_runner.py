@@ -122,13 +122,14 @@ def test_expired_certificate_makes_scan_incomplete_but_keeps_findings() -> None:
             https=None,
             http=None,
             tls=TlsProbe(TlsStatus.EXPIRED, "the certificate has expired"),
-            skip_reasons={Input.HTTPS: reason, Input.HTTP: "failed"},
+            skip_reasons={Input.HTTPS: reason, Input.HOMEPAGE: reason, Input.HTTP: "failed"},
         )
     )
     assert report.status is ScanStatus.INCOMPLETE
     assert report.incomplete_reason == reason
     assert report.score is None
     assert report.grade is None
+    assert report.score_label is None
     assert "tls.cert_expired" in ids(report)
     skipped = {item.check_id: item.reason for item in report.skipped}
     assert skipped["headers.csp_missing"] == reason
@@ -142,12 +143,70 @@ def test_incomplete_has_a_reason_even_if_none_was_recorded() -> None:
     assert report.incomplete_reason
 
 
-def test_missing_non_homepage_input_is_skipped_but_scan_completes() -> None:
+def test_failed_dns_lookup_keeps_the_score_but_labels_it_partial() -> None:
     report = run_checks(healthy(dmarc_records=None, skip_reasons={Input.DMARC: "DNS failed"}))
-    assert report.status is ScanStatus.COMPLETE
-    assert report.score == 100
+    assert report.status is ScanStatus.PARTIAL
+    assert report.score_label == "Partial — 2 checks skipped"
+    assert (report.score, report.grade) == (100, "A+")
     skipped = {item.check_id: item.reason for item in report.skipped}
     assert skipped == {"dns.dmarc_missing": "DNS failed", "dns.dmarc_weak": "DNS failed"}
+
+
+def test_failed_tls_probe_keeps_the_score_but_labels_it_partial() -> None:
+    report = run_checks(healthy(tls=None, skip_reasons={Input.TLS: "timed out"}))
+    assert report.status is ScanStatus.PARTIAL
+    assert report.score == 100
+    assert report.score_label == f"Partial — {len(report.skipped)} checks skipped"
+
+
+def test_partial_label_uses_singular_for_one_check() -> None:
+    probe = TlsProbe(TlsStatus.OK, protocol="TLSv1.3", legacy_accepted=False)
+    report = run_checks(healthy(tls=probe))
+    assert report.score_label == "Partial — 1 check skipped"
+
+
+def test_full_scan_has_no_label() -> None:
+    report = run_checks(healthy())
+    assert report.status is ScanStatus.COMPLETE
+    assert report.score_label is None
+
+
+def http_only_context(**overrides: object) -> ScanContext:
+    fields: dict[str, object] = {
+        "https": None,
+        "http": response(
+            headers=[("set-cookie", "session=abc")],
+            url="http://example.com/",
+        ),
+        "tls": TlsProbe(TlsStatus.NO_HTTPS, "port 443 refused the connection"),
+        "homepage_via_http": True,
+        "not_applicable": frozenset({Input.HTTPS}),
+        "skip_reasons": {Input.HTTPS: "HSTS only works over HTTPS."},
+    }
+    return healthy(**(fields | overrides))
+
+
+def test_http_only_site_gets_a_real_low_score() -> None:
+    report = run_checks(http_only_context())
+    assert report.status is ScanStatus.COMPLETE
+    assert report.incomplete_reason is None
+    assert report.score_label is None
+    # no_https 25, CSP 7, clickjacking 7, cookies 7 + 7 + 2, nosniff 2, referrer 2
+    assert (report.score, report.grade) == (41, "D")
+    assert report.findings[0].check_id == "tls.no_https"
+    assert report.findings[0].severity is Severity.CRITICAL
+
+
+def test_http_only_site_runs_header_and_cookie_checks_on_http_page() -> None:
+    found = ids(run_checks(http_only_context()))
+    assert {"headers.csp_missing", "cookies.secure", "cookies.httponly"} <= set(found)
+
+
+def test_http_only_site_is_not_charged_for_things_https_would_need() -> None:
+    report = run_checks(http_only_context())
+    assert not {"tls.no_http_redirect", "tls.hsts_missing", "tls.hsts_weak"} & set(ids(report))
+    skipped = {item.check_id: item.not_applicable for item in report.skipped}
+    assert skipped == {"tls.hsts_missing": True, "tls.hsts_weak": True}
 
 
 def test_shared_platform_is_scored_without_dns_penalties() -> None:
@@ -161,8 +220,12 @@ def test_shared_platform_is_scored_without_dns_penalties() -> None:
             caa_records=None,
             shared_platform_suffix="vercel.app",
             skip_reasons=dict.fromkeys((Input.SPF, Input.DMARC, Input.CAA), reason),
+            not_applicable=frozenset({Input.SPF, Input.DMARC, Input.CAA}),
         )
     )
+    # Skipped by design, so the grade isn't generous and no "partial" label is shown.
+    assert report.status is ScanStatus.COMPLETE
+    assert report.score_label is None
     assert ids(report) == ["dns.shared_platform_domain"]
     assert report.findings[0].severity is Severity.INFO
     assert (report.score, report.grade) == (100, "A+")
@@ -208,6 +271,7 @@ def test_crashing_check_does_not_lose_the_report(
     report = run_checks(healthy())
 
     assert ids(report) == ["tls.hsts_weak"]
+    assert report.score_label == "Partial — 2 checks skipped"
     skipped = {item.check_id: item.reason for item in report.skipped}
     assert skipped["tls.cert_untrusted"] == "no answer"
     assert skipped["tls.cert_expired"] == runner._CHECK_FAILED_REASON

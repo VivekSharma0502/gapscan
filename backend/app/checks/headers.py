@@ -39,7 +39,7 @@ def _parse_csp(value: str) -> Directives:
 
 
 def _policies(ctx: ScanContext) -> list[Directives]:
-    return [_parse_csp(value) for value in ctx.https.headers.get_list("content-security-policy")]
+    return [_parse_csp(value) for value in ctx.homepage.headers.get_list("content-security-policy")]
 
 
 def _script_weaknesses(policy: Directives) -> list[str]:
@@ -62,12 +62,12 @@ def _script_weaknesses(policy: Directives) -> list[str]:
     return weaknesses
 
 
-@check("headers.csp_missing", Category.HEADERS, requires=[Input.HTTPS])
+@check("headers.csp_missing", Category.HEADERS, requires=[Input.HOMEPAGE])
 def csp_missing(ctx: ScanContext) -> Finding | None:
     if _policies(ctx):
         return None
     # Report-Only never blocks anything, so it doesn't count as having a policy.
-    report_only = "content-security-policy-report-only" in ctx.https.headers
+    report_only = "content-security-policy-report-only" in ctx.homepage.headers
     evidence = (
         "Only Content-Security-Policy-Report-Only is set, which blocks nothing"
         if report_only
@@ -76,7 +76,7 @@ def csp_missing(ctx: ScanContext) -> Finding | None:
     return make_finding("headers.csp_missing", Severity.MEDIUM, evidence)
 
 
-@check("headers.csp_weak", Category.HEADERS, requires=[Input.HTTPS])
+@check("headers.csp_weak", Category.HEADERS, requires=[Input.HOMEPAGE])
 def csp_weak(ctx: ScanContext) -> Finding | None:
     policies = _policies(ctx)
     if not policies:
@@ -88,7 +88,7 @@ def csp_weak(ctx: ScanContext) -> Finding | None:
     return make_finding("headers.csp_weak", Severity.LOW, f"Allows: {', '.join(weaknesses[0])}")
 
 
-@check("headers.clickjacking", Category.HEADERS, requires=[Input.HTTPS])
+@check("headers.clickjacking", Category.HEADERS, requires=[Input.HOMEPAGE])
 def clickjacking(ctx: ScanContext) -> Finding | None:
     ancestors = [
         policy["frame-ancestors"] for policy in _policies(ctx) if "frame-ancestors" in policy
@@ -101,7 +101,7 @@ def clickjacking(ctx: ScanContext) -> Finding | None:
             "headers.clickjacking", Severity.MEDIUM, "frame-ancestors allows any website"
         )
 
-    frame_options = ctx.https.headers.get("x-frame-options")
+    frame_options = ctx.homepage.headers.get("x-frame-options")
     if frame_options is None:
         return make_finding(
             "headers.clickjacking",
@@ -116,18 +116,18 @@ def clickjacking(ctx: ScanContext) -> Finding | None:
     )
 
 
-@check("headers.content_type_options", Category.HEADERS, requires=[Input.HTTPS])
+@check("headers.content_type_options", Category.HEADERS, requires=[Input.HOMEPAGE])
 def content_type_options(ctx: ScanContext) -> Finding | None:
-    value = ctx.https.headers.get("x-content-type-options")
+    value = ctx.homepage.headers.get("x-content-type-options")
     if value is not None and value.split(",")[0].strip().lower() == "nosniff":
         return None
     evidence = f"X-Content-Type-Options: {value}" if value else "No X-Content-Type-Options header"
     return make_finding("headers.content_type_options", Severity.LOW, evidence)
 
 
-@check("headers.referrer_policy", Category.HEADERS, requires=[Input.HTTPS])
+@check("headers.referrer_policy", Category.HEADERS, requires=[Input.HOMEPAGE])
 def referrer_policy(ctx: ScanContext) -> Finding | None:
-    value = ctx.https.headers.get("referrer-policy", "")
+    value = ctx.homepage.headers.get("referrer-policy", "")
     tokens = [token.strip().lower() for token in value.split(",")]
     # A comma list is a fallback chain: the last value the browser understands wins.
     recognised = [token for token in tokens if token in _VALID_REFERRER_POLICIES]
@@ -142,19 +142,19 @@ def referrer_policy(ctx: ScanContext) -> Finding | None:
     return None
 
 
-@check("headers.permissions_policy", Category.HEADERS, requires=[Input.HTTPS])
+@check("headers.permissions_policy", Category.HEADERS, requires=[Input.HOMEPAGE])
 def permissions_policy(ctx: ScanContext) -> Finding | None:
-    if "permissions-policy" in ctx.https.headers or "feature-policy" in ctx.https.headers:
+    if "permissions-policy" in ctx.homepage.headers or "feature-policy" in ctx.homepage.headers:
         return None
     return make_finding("headers.permissions_policy", Severity.INFO, "No Permissions-Policy header")
 
 
-@check("headers.server_version", Category.HEADERS, requires=[Input.HTTPS])
+@check("headers.server_version", Category.HEADERS, requires=[Input.HOMEPAGE])
 def server_version(ctx: ScanContext) -> Finding | None:
     leaks = [
-        f"{name}: {ctx.https.headers[name]}"
+        f"{name}: {ctx.homepage.headers[name]}"
         for name in _VERSION_HEADERS
-        if name in ctx.https.headers and _VERSION_RE.search(ctx.https.headers[name])
+        if name in ctx.homepage.headers and _VERSION_RE.search(ctx.homepage.headers[name])
     ]
     if not leaks:
         return None

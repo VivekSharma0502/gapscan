@@ -6,7 +6,7 @@ that needed it are reported as skipped instead of passed.
 
 import ipaddress
 
-from app.checks.base import Input, ScanContext
+from app.checks.base import BLOCKED_STATUSES, Input, ScanContext, shows_real_page
 from app.checks.domains import registrable_domain, shared_platform_suffix
 from app.core.safe_http import (
     BlockedTargetError,
@@ -24,6 +24,11 @@ BLOCKED_REASON = "This address can't be scanned."
 _DNS_FAILED_REASON = "The DNS lookup did not complete."
 _ALL_INPUTS = tuple(Input)
 _DNS_INPUTS = (Input.SPF, Input.DMARC, Input.CAA)
+
+
+def _has_no_https(tls: TlsProbe | None) -> bool:
+    # A server that only speaks old TLS does have HTTPS, just not one we can use safely.
+    return tls is not None and tls.status is TlsStatus.NO_HTTPS and tls.legacy_accepted is not True
 
 
 def _unreachable_reason(tls: TlsProbe | None, error: SafeHttpError) -> str:
@@ -48,13 +53,19 @@ def _fetch_homepage(hostname: str, tls: TlsProbe | None) -> tuple[SafeResponse |
         response = safe_get(f"https://{hostname}/")
     except SafeHttpError as exc:
         return None, _unreachable_reason(tls, exc)
-    # An error or bot-block page doesn't show the site's real headers and cookies.
-    if response.status_code >= 400:
-        return None, (
-            f"The homepage returned HTTP {response.status_code}, so its security settings "
-            "could not be read."
+    problem = _status_problem(response.status_code)
+    return (None, problem) if problem is not None else (response, None)
+
+
+def _status_problem(status_code: int) -> str | None:
+    if shows_real_page(status_code):
+        return None
+    if status_code in BLOCKED_STATUSES:
+        return (
+            "Blocked by bot protection or a firewall (e.g. Cloudflare), so we couldn't see "
+            f"the real page (HTTP {status_code})."
         )
-    return response, None
+    return f"The homepage returned HTTP {status_code}, so its security settings could not be read."
 
 
 def _caa_lookup(hostname: str, domain: str) -> list[str]:
@@ -75,21 +86,25 @@ def _is_ip_literal(hostname: str) -> bool:
     return True
 
 
-def _collect_dns(hostname: str) -> tuple[dict[str, object], dict[Input, str]]:
-    def skip_all(reason: str) -> dict[Input, str]:
-        return dict.fromkeys(_DNS_INPUTS, reason)
+def _collect_dns(hostname: str) -> tuple[dict[str, object], dict[Input, str], set[Input]]:
+    def not_applicable(
+        reason: str, fields: dict[str, object] | None = None
+    ) -> tuple[dict[str, object], dict[Input, str], set[Input]]:
+        return fields or {}, dict.fromkeys(_DNS_INPUTS, reason), set(_DNS_INPUTS)
 
     if _is_ip_literal(hostname):
-        return {}, skip_all("DNS checks don't apply to a bare IP address.")
+        return not_applicable("DNS checks don't apply to a bare IP address.")
 
     suffix = shared_platform_suffix(hostname)
     if suffix is not None:
-        reason = f"{suffix} is a shared domain, so these records belong to the platform."
-        return {"shared_platform_suffix": suffix}, skip_all(reason)
+        return not_applicable(
+            f"{suffix} is a shared domain, so these records belong to the platform.",
+            {"shared_platform_suffix": suffix},
+        )
 
     domain = registrable_domain(hostname)
     if domain is None:
-        return {}, skip_all("This hostname has no registered domain to check.")
+        return not_applicable("This hostname has no registered domain to check.")
 
     fields: dict[str, object] = {"email_domain": domain}
     reasons: dict[Input, str] = {}
@@ -103,7 +118,7 @@ def _collect_dns(hostname: str) -> tuple[dict[str, object], dict[Input, str]]:
             fields[input_name.value] = lookup()
         except SafeHttpError:
             reasons[input_name] = _DNS_FAILED_REASON
-    return fields, reasons
+    return fields, reasons, set()
 
 
 def collect_context(hostname: str) -> ScanContext:
@@ -120,8 +135,6 @@ def collect_context(hostname: str) -> ScanContext:
         reasons[Input.TLS] = "We could not complete a TLS connection."
 
     https, https_reason = _fetch_homepage(name, tls)
-    if https_reason is not None:
-        reasons[Input.HTTPS] = https_reason
 
     try:
         http = safe_get(f"http://{name}/")
@@ -129,9 +142,35 @@ def collect_context(hostname: str) -> ScanContext:
         http = None
         reasons[Input.HTTP] = "We could not load the site over HTTP."
 
-    dns_fields, dns_reasons = _collect_dns(name)
+    not_applicable: set[Input] = set()
+    homepage_via_http = False
+    # Only a definite "no HTTPS" counts. After a timeout, HTTPS may well exist, and reading
+    # the HTTP page instead could score the wrong thing.
+    if https is None and _has_no_https(tls) and http is not None:
+        http_problem = _status_problem(http.status_code)
+        if http_problem is None:
+            homepage_via_http = True
+            https_reason = None
+            reasons[Input.HTTPS] = "HSTS only works over HTTPS, which this site doesn't offer."
+            not_applicable.add(Input.HTTPS)
+        else:
+            https_reason = http_problem
+
+    if https_reason is not None:
+        reasons[Input.HTTPS] = https_reason
+        reasons[Input.HOMEPAGE] = https_reason
+
+    dns_fields, dns_reasons, dns_not_applicable = _collect_dns(name)
     reasons.update(dns_reasons)
+    not_applicable |= dns_not_applicable
 
     return ScanContext(
-        hostname=name, https=https, http=http, tls=tls, skip_reasons=reasons, **dns_fields
+        hostname=name,
+        https=https,
+        http=http,
+        tls=tls,
+        skip_reasons=reasons,
+        not_applicable=frozenset(not_applicable),
+        homepage_via_http=homepage_via_http,
+        **dns_fields,
     )

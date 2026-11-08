@@ -13,6 +13,17 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.core.safe_http import SafeResponse, TlsProbe
 
+BLOCKED_STATUSES = frozenset({403, 429, 503})
+
+
+def shows_real_page(status_code: int) -> bool:
+    """Whether a response carries the site's own headers.
+
+    A 404 or 401 still comes from the real app. A firewall's block page or a server error
+    doesn't, so its headers and cookies say nothing about the site.
+    """
+    return status_code < 500 and status_code not in BLOCKED_STATUSES
+
 
 class Severity(StrEnum):
     CRITICAL = "critical"
@@ -84,6 +95,8 @@ class Input(StrEnum):
 
     HTTPS = "https"
     HTTP = "http"
+    # The page whose headers, cookies and HTML are checked. See ScanContext.homepage.
+    HOMEPAGE = "homepage"
     TLS = "tls"
     SPF = "spf_records"
     DMARC = "dmarc_records"
@@ -112,5 +125,16 @@ class ScanContext:
     shared_platform_suffix: str | None = None
     # Why an input is missing, shown to the user next to the checks it prevented.
     skip_reasons: Mapping[Input, str] = field(default_factory=dict)
+    # Inputs missing by design, like SPF on vercel.app. Skips caused by these don't count
+    # against the scan, unlike a lookup that failed and might have found something.
+    not_applicable: frozenset[Input] = frozenset()
+    # True when the host has no HTTPS, so the HTTP response stands in as the homepage.
+    homepage_via_http: bool = False
     # Part of the context so expiry checks give the same answer every time in tests.
     checked_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def homepage(self) -> SafeResponse | None:
+        if self.https is not None:
+            return self.https
+        return self.http if self.homepage_via_http else None

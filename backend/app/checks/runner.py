@@ -21,12 +21,16 @@ _NO_HOMEPAGE_REASON = "We could not read the site's homepage."
 
 class ScanStatus(StrEnum):
     COMPLETE = "complete"
+    # Scored, but some checks that should have run could not, so the grade may be generous.
+    PARTIAL = "partial"
     INCOMPLETE = "incomplete"
 
 
 class SkippedCheck(BaseModel):
     check_id: str
     reason: str
+    # True when the check can't apply to this site, as opposed to having failed.
+    not_applicable: bool = False
 
 
 class ScanReport(BaseModel):
@@ -36,15 +40,21 @@ class ScanReport(BaseModel):
     # None when the scan is incomplete. A partial score would flatter a broken site.
     score: int | None
     grade: str | None
+    # Shown next to a partial score, so nobody mistakes it for a full result.
+    score_label: str | None
     findings: list[Finding]
     skipped: list[SkippedCheck]
 
 
-def _missing_input_reason(spec: CheckSpec, ctx: ScanContext) -> str | None:
+def _missing_input(spec: CheckSpec, ctx: ScanContext) -> Input | None:
     for needed in sorted(spec.requires):
         if getattr(ctx, needed.value) is None:
-            return ctx.skip_reasons.get(needed, _NOT_COLLECTED_REASON)
+            return needed
     return None
+
+
+def _partial_label(count: int) -> str:
+    return f"Partial — {count} check{'' if count == 1 else 's'} skipped"
 
 
 def run_checks(ctx: ScanContext) -> ScanReport:
@@ -52,9 +62,15 @@ def run_checks(ctx: ScanContext) -> ScanReport:
     skipped: list[SkippedCheck] = []
 
     for spec in all_checks():
-        reason = _missing_input_reason(spec, ctx)
-        if reason is not None:
-            skipped.append(SkippedCheck(check_id=spec.check_id, reason=reason))
+        missing = _missing_input(spec, ctx)
+        if missing is not None:
+            skipped.append(
+                SkippedCheck(
+                    check_id=spec.check_id,
+                    reason=ctx.skip_reasons.get(missing, _NOT_COLLECTED_REASON),
+                    not_applicable=missing in ctx.not_applicable,
+                )
+            )
             continue
         try:
             finding = spec.func(ctx)
@@ -72,25 +88,28 @@ def run_checks(ctx: ScanContext) -> ScanReport:
 
     findings.sort(key=lambda item: (_SEVERITY_ORDER.index(item.severity), item.check_id))
 
-    if ctx.https is None:
-        reason = ctx.skip_reasons.get(Input.HTTPS, _NO_HOMEPAGE_REASON)
+    if ctx.homepage is None:
+        reason = ctx.skip_reasons.get(Input.HOMEPAGE, _NO_HOMEPAGE_REASON)
         return ScanReport(
             hostname=ctx.hostname,
             status=ScanStatus.INCOMPLETE,
             incomplete_reason=reason,
             score=None,
             grade=None,
+            score_label=None,
             findings=findings,
             skipped=skipped,
         )
 
     score = calculate_score(findings)
+    failed_count = sum(1 for item in skipped if not item.not_applicable)
     return ScanReport(
         hostname=ctx.hostname,
-        status=ScanStatus.COMPLETE,
+        status=ScanStatus.PARTIAL if failed_count else ScanStatus.COMPLETE,
         incomplete_reason=None,
         score=score,
         grade=grade_for(score),
+        score_label=_partial_label(failed_count) if failed_count else None,
         findings=findings,
         skipped=skipped,
     )

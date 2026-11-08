@@ -49,6 +49,47 @@ def test_no_https_not_claimed_for_server_with_only_old_tls() -> None:
     assert tls.no_https(ctx(tls=probe, http=HTTP_OK)) is None
 
 
+def test_no_https_still_found_when_http_page_is_a_404() -> None:
+    probe = TlsProbe(TlsStatus.NO_HTTPS, "refused")
+    assert tls.no_https(ctx(tls=probe, http=response(url="http://a.com/", status=404))) is not None
+
+
+@pytest.mark.parametrize("status", [403, 429, 500])
+def test_no_https_not_claimed_from_a_block_or_error_page(status: int) -> None:
+    probe = TlsProbe(TlsStatus.NO_HTTPS, "refused")
+    assert tls.no_https(ctx(tls=probe, http=response(url="http://a.com/", status=status))) is None
+
+
+def test_no_https_not_claimed_when_http_redirects_to_secure_host() -> None:
+    probe = TlsProbe(TlsStatus.NO_HTTPS, "refused")
+    secure = response(url="https://www.example.com/", redirects=("https://www.example.com/",))
+    assert tls.no_https(ctx(tls=probe, http=secure)) is None
+
+
+def test_no_https_skips_when_http_could_not_be_loaded() -> None:
+    probe = TlsProbe(TlsStatus.NO_HTTPS, "refused")
+    with pytest.raises(SkipCheck):
+        tls.no_https(ctx(tls=probe))
+
+
+def test_no_https_passes_without_http_when_tls_is_healthy() -> None:
+    assert tls.no_https(ctx(tls=healthy())) is None
+
+
+def test_no_http_redirect_not_charged_when_there_is_no_https() -> None:
+    probe = TlsProbe(TlsStatus.NO_HTTPS, "refused")
+    assert tls.no_http_redirect(ctx(tls=probe, http=HTTP_OK)) is None
+
+
+def test_no_http_redirect_still_found_for_old_tls_only_server() -> None:
+    probe = TlsProbe(TlsStatus.NO_HTTPS, "no modern handshake", legacy_accepted=True)
+    assert tls.no_http_redirect(ctx(tls=probe, http=HTTP_OK)) is not None
+
+
+def test_legacy_version_passes_when_there_is_no_tls_to_test() -> None:
+    assert tls.legacy_version(ctx(tls=TlsProbe(TlsStatus.NO_HTTPS, "refused"))) is None
+
+
 def test_cert_expired() -> None:
     probe = TlsProbe(TlsStatus.EXPIRED, "the certificate has expired")
     finding = tls.cert_expired(ctx(tls=probe))
