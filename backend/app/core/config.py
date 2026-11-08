@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, IPvAnyAddress, field_validator
+from pydantic import Field, IPvAnyAddress, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.core.product import PRODUCT_NAME
@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     # The Supabase project URL, e.g. https://abcd.supabase.co. Tokens are verified against
     # its public keys. Empty means sign-in is off and any token is refused with a 503.
     supabase_url: str = ""
+    # The publishable key, needed to ask Supabase which GitHub account a user signed in with.
+    # Not a secret: it grants nothing without the user's own access token.
+    supabase_publishable_key: str = ""
+
+    # The GitHub App. Empty means repo scanning is off.
+    github_app_id: str = ""
+    # The app's URL name, as in github.com/apps/<slug>.
+    github_app_slug: str = ""
+    # Security: SecretStr keeps both out of logs, reprs and tracebacks. The key is base64 so
+    # the multi-line .pem fits on one env line, the same way locally and in production.
+    github_app_private_key_b64: SecretStr = SecretStr("")
+    github_webhook_secret: SecretStr = SecretStr("")
 
     @field_validator("supabase_url")
     @classmethod

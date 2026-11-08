@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Column, DateTime, Enum, ForeignKey, Index, Uuid
+from sqlalchemy import JSON, Column, DateTime, Enum, ForeignKey, Index, UniqueConstraint, Uuid
 from sqlmodel import Field, SQLModel
 
 from app.checks.base import Category, Severity
@@ -60,17 +60,18 @@ def _timestamp_column(*, nullable: bool = False) -> Column[Any]:
 class Scan(SQLModel, table=True):
     __tablename__ = "scans"
     # Serves the per-hostname reuse window and hourly cap on every quick scan request.
-    # The other two serve the dashboard's per-domain history and recent scans, newest first.
+    # The others serve per-domain and per-repo history and recent scans, newest first.
     __table_args__ = (
         Index("ix_scans_target_mode_created_at", "target", "mode", "created_at"),
         Index("ix_scans_domain_id_created_at", "domain_id", "created_at"),
+        Index("ix_scans_repo_id_created_at", "repo_id", "created_at"),
         Index("ix_scans_owner_id_created_at", "owner_id", "created_at"),
     )
 
     # Security: a random UUID, because anyone holding the id can read the scan's teaser.
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     # Null means nobody has claimed this anonymous scan yet. Others who scanned the same site
-    # can also hold a redeemed ScanClaim for it. Repos arrive in a later step.
+    # can also hold a redeemed ScanClaim for it.
     owner_id: UUID | None = Field(
         default=None,
         sa_column=Column(Uuid, ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True),
@@ -80,7 +81,14 @@ class Scan(SQLModel, table=True):
         default=None,
         sa_column=Column(Uuid, ForeignKey("domains.id", ondelete="SET NULL"), nullable=True),
     )
-    repo_id: UUID | None = None
+    repo_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(Uuid, ForeignKey("repos.id", ondelete="SET NULL"), nullable=True),
+    )
+    # The commits a push added, kept here so the queue never carries scan input. Both null
+    # means the whole history. after_sha alone means a new branch.
+    before_sha: str | None = Field(default=None, max_length=40)
+    after_sha: str | None = Field(default=None, max_length=40)
     target_type: TargetType = Field(sa_column=_enum_column(TargetType))
     target: str = Field(max_length=253)
     mode: ScanMode = Field(sa_column=_enum_column(ScanMode))
@@ -107,6 +115,10 @@ class FindingRecord(SQLModel, table=True):
     """A stored finding. The explanation and fixes stay in code, keyed by check_id."""
 
     __tablename__ = "findings"
+    # Rescans can't duplicate a secret. Web findings leave both null, and nulls never conflict.
+    __table_args__ = (
+        UniqueConstraint("repo_id", "fingerprint", name="uq_findings_repo_fingerprint"),
+    )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     scan_id: UUID = Field(
@@ -124,6 +136,19 @@ class FindingRecord(SQLModel, table=True):
         default=None,
         sa_column=Column(Uuid, ForeignKey("findings.id", ondelete="SET NULL"), nullable=True),
     )
+    # The rest are for secrets found in a repo, and are null on web findings.
+    repo_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(Uuid, ForeignKey("repos.id", ondelete="CASCADE"), nullable=True),
+    )
+    rule_id: str | None = Field(default=None, max_length=128)
+    file_path: str | None = None
+    line: int | None = None
+    commit_sha: str | None = Field(default=None, max_length=40)
+    # SHA-256 of gitleaks' commit:file:rule:line. Hashed for a fixed size, since paths can be
+    # longer than a Postgres index entry allows.
+    fingerprint: str | None = Field(default=None, max_length=64)
+    # For a repo finding this is the first-seen date: a rescan keeps the existing row.
     created_at: datetime = Field(default_factory=utc_now, sa_column=_timestamp_column())
 
 

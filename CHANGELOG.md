@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-11-09: Phase 3, step 3a-1: GitHub App foundations
+
+**Added**
+- A GitHub App client: signs the app's short-lived JWT, looks up who an installation belongs to, lists repos, and issues and revokes installation tokens.
+- Tables for installations, repos, one-time install states and webhook deliveries, plus repo columns on `scans` and `findings`. Run `alembic upgrade head`.
+- Settings for the GitHub App, and `SUPABASE_PUBLISHABLE_KEY` for the backend. "GitHub App setup" in the README covers creating the app and where each value goes.
+- gitleaks is now a prerequisite for repo scanning. It's a system tool, not a Python or npm package.
+
+**Security**
+- `safe_http` can now make authenticated API calls. They are HTTPS only, get the same SSRF checks, can't override `Host` or `User-Agent`, and refuse redirects so a token can't be forwarded to another address.
+- Scan tokens are limited to one repo and read-only, and tokens used to list repos can't read code.
+- Repo names from GitHub must match a strict owner/name pattern, because they end up in a git URL.
+- Validation errors from GitHub responses never quote the response, which could contain a token.
+
+**Decisions**
+- `git clone` can't go through `safe_http`, so it's a documented exception limited to `https://github.com` and names from the GitHub API.
+- Masks are fixed per provider (`AKIA****`), because `--redact` can only keep the start of a secret and a long key would leave a lot of it on disk.
+- Repo findings are deduped on a hash of gitleaks' fingerprint, so a rescan keeps the original row and its first-seen date. It's hashed because file paths can be too long for a Postgres index.
+
 ## 2026-11-09: Phase 2, step 2c: dashboard and rename to GapScan
 
 **Added**

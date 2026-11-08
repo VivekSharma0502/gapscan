@@ -14,7 +14,7 @@ import socket
 import ssl
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -111,6 +111,10 @@ class TooManyRedirectsError(SafeHttpError):
 
 class OffHostRedirectError(SafeHttpError):
     """A redirect pointed outside the hosts this request is allowed to visit."""
+
+
+class RedirectRefusedError(SafeHttpError):
+    """A request carrying credentials was redirected. The redirect was not followed."""
 
 
 class RequestFailedError(SafeHttpError):
@@ -415,7 +419,14 @@ def _read_capped(
     return bytes(body), False
 
 
-def _send_pinned(method: str, url: httpx.URL, deadline: float, max_bytes: int) -> _Hop:
+def _send_pinned(
+    method: str,
+    url: httpx.URL,
+    deadline: float,
+    max_bytes: int,
+    extra_headers: Mapping[str, str] | None = None,
+    body: bytes | None = None,
+) -> _Hop:
     host = url.raw_host.decode("ascii")
     ip = _validated_ip(host, deadline)
     timeouts = _timeouts(deadline)
@@ -424,12 +435,17 @@ def _send_pinned(method: str, url: httpx.URL, deadline: float, max_bytes: int) -
     # library resolved the name again, DNS could answer differently the second time
     # (DNS rebinding) and send us to an internal address.
     pinned_url = url.copy_with(host=str(ip))
-    headers = {
-        "Host": url.netloc.decode("ascii"),
-        "User-Agent": settings.scanner_user_agent,
-        "Accept": "*/*",
-        "Accept-Encoding": "gzip, deflate",
-    }
+    headers = httpx.Headers({"Accept": "*/*"})
+    headers.update(extra_headers or {})
+    # Security: applied last, so a caller can't redirect the request with its own Host header
+    # or send traffic that hides who is making it.
+    headers.update(
+        {
+            "Host": url.netloc.decode("ascii"),
+            "User-Agent": settings.scanner_user_agent,
+            "Accept-Encoding": "gzip, deflate",
+        }
+    )
     # Security: SNI carries the real hostname, so the certificate is still verified
     # against that name even though the connection is made to an IP.
     extensions = {"sni_hostname": host.rstrip(".")} if url.scheme == "https" else {}
@@ -443,7 +459,12 @@ def _send_pinned(method: str, url: httpx.URL, deadline: float, max_bytes: int) -
             transport=_make_transport(), trust_env=False, follow_redirects=False
         ) as client:
             request = client.build_request(
-                method, pinned_url, headers=headers, extensions=extensions, timeout=timeouts
+                method,
+                pinned_url,
+                headers=headers,
+                content=body,
+                extensions=extensions,
+                timeout=timeouts,
             )
             response = client.send(request, stream=True)
             try:
@@ -511,6 +532,40 @@ def safe_get(
 
 def safe_head(url: str) -> SafeResponse:
     return _fetch("HEAD", url)
+
+
+def safe_api_request(
+    method: Literal["GET", "POST", "DELETE"],
+    url: str,
+    *,
+    headers: Mapping[str, str],
+    json_body: Any = None,
+) -> SafeResponse:
+    """Call an HTTPS API with credentials, under the same SSRF checks as any other request."""
+    deadline = time.monotonic() + TOTAL_DEADLINE_SECONDS
+    target = _parse_url(url)
+    # Security: credentials never travel over plain HTTP.
+    if target.scheme != "https":
+        raise BlockedTargetError("scheme not allowed")
+
+    extra_headers = dict(headers)
+    body = None
+    if json_body is not None:
+        body = json.dumps(json_body).encode()
+        extra_headers["Content-Type"] = "application/json"
+
+    hop = _send_pinned(method, target, deadline, MAX_RESPONSE_BYTES, extra_headers, body)
+    # Security: never followed. Repeating the request elsewhere would hand over the token.
+    if hop.location is not None:
+        raise RedirectRefusedError("redirect refused for a request with credentials")
+    return SafeResponse(
+        url=str(target),
+        status_code=hop.status_code,
+        headers=hop.headers,
+        content=hop.content,
+        truncated=hop.truncated,
+        redirects=(),
+    )
 
 
 def _make_tls_context() -> ssl.SSLContext:

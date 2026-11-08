@@ -17,7 +17,7 @@ Security scanner SaaS: website + GitHub repo scanning for students, freelancers,
 - Explain security decisions briefly in code comments — this project is also my portfolio.
 
 ## Hard security rules
-- Every outbound HTTP request from the backend goes through `backend/app/core/safe_http.py` (SSRF guard). No direct `httpx` calls elsewhere.
+- Every outbound HTTP request from the backend goes through `backend/app/core/safe_http.py` (SSRF guard). No direct `httpx` calls elsewhere. One exception: the repo scanner's `git clone`, only to `https://github.com/<owner>/<name>.git` with redirects off and the name taken from a GitHub API response.
 - Active checks (exposed files, BaaS probes) run **only on verified domains**. Quick scans are passive only.
 - Never store, log or print full secrets — mask them.
 - Never commit `.env` or keys. Keep `.env.example` updated.

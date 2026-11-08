@@ -80,7 +80,8 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 
 ### Phase 3 — Repos + BaaS + correlation (Week 3–4)
 - GitHub App: install → list repos → scan with gitleaks; webhook on `push` scans new commits
-- Store only masked secrets (`AKIA****XYZ`) + file/line/commit
+- Store only masked secrets + file/line/commit. gitleaks runs with `--redact`, so the mask is a fixed per-provider prefix (`AKIA****`) and no characters of the real secret are kept. Findings are deduped per repo on gitleaks' fingerprint, so a rescan keeps the first-seen date
+- Personal-account installs only for now. Organization installs need GitHub's user authorization during install (later)
 - BaaS checks (verified domains only):
   - Firebase config in JS bundle → RTDB `/.json` readable? Firestore/Storage rules open?
   - Supabase URL + anon key in bundle → tables readable without RLS?
@@ -102,10 +103,12 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 ## Database (draft)
 - **profiles**: id (= Supabase uid), email, name, plan, created_at
 - **domains**: id, owner_id, hostname (unique per owner, not globally), verify_token, verified_at, verified_method, created_at
-- **github_installations**: id, owner_id, installation_id, account_login, created_at
-- **repos**: id, owner_id, installation_id, full_name, is_private, created_at
-- **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, target, mode (quick|full), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, grade_cap_reason, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
-- **findings**: id, scan_id, check_id, category, severity (critical|high|medium|low|info), title, evidence_masked, location, linked_finding_id, created_at
+- **github_install_states**: id, owner_id, token_hash, expires_at, created_at (one-time, ties an install redirect to the user who started it)
+- **github_installations**: id, owner_id, installation_id, account_id, account_login, suspended_at, created_at
+- **repos**: id, owner_id, installation_id, github_repo_id, full_name, is_private, first_full_scan_at, needs_full_scan, created_at
+- **github_deliveries**: delivery_id, received_at (webhook replay protection)
+- **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, before_sha, after_sha, target, mode (quick|full), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, grade_cap_reason, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
+- **findings**: id, scan_id, check_id, category, severity (critical|high|medium|low|info), title, evidence_masked, location, linked_finding_id, repo_id, rule_id, file_path, line, commit_sha, fingerprint, created_at (first seen, for repo findings)
 - **scan_claims**: id, scan_id, token_hash, created_at, claimed_by, claimed_at (one per anonymous request, redeemed after signup. A redeemed row grants that user the full report, since scans within the reuse window are shared)
 - **notification_settings**: owner_id, email_enabled, telegram_chat_id, min_severity
 - Check text (what it means / fixes per platform) lives in code, keyed by `check_id`.
@@ -138,6 +141,7 @@ Grade caps, on top of the points (the numeric score stays as calculated): no HTT
 
 ## Security rules (non-negotiable)
 - **SSRF guard** on every outbound request: resolve DNS, block private/loopback/link-local/reserved/multicast IPs (v4 + v6), re-check after each redirect, max 5 redirects, timeouts, response size cap
+- The repo scanner's `git clone` can't use the guard, so it is the one exception: `https://github.com/<owner>/<name>.git` only, redirects off, name from a GitHub API response
 - **Ownership** required for active + BaaS checks (DNS TXT for domains, GitHub App install for repos)
 - **Rate limiting** (slowapi) — strict on `/api/scans/quick`
 - Never store or log full secrets; mask everything

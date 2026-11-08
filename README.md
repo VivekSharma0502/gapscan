@@ -19,6 +19,7 @@ The product name is set once, in `product.json`. The backend and frontend both r
 - Node.js 22 or newer
 - Python 3.11 or newer
 - Docker
+- Git 2.31 or newer, and [gitleaks](https://github.com/gitleaks/gitleaks) for repo scanning (`winget install --id Gitleaks.Gitleaks -e`, then open a new terminal)
 
 ## Setup
 
@@ -62,6 +63,26 @@ Supabase is used for Auth only. App data stays in the local Postgres. Scanning w
 6. Add `SUPABASE_URL` to `.env`, and `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `frontend/.env.local`. See `.env.example`. Restart both dev servers.
 
 The backend needs no Supabase secret. Don't add the service role key or the JWT secret to either file. Magic links must be opened in the browser that requested them.
+
+## GitHub App setup
+
+Repo scanning uses a GitHub App. This is separate from the OAuth App used for sign-in.
+
+1. Open <https://smee.io>, choose "Start a new channel" and copy the URL. It forwards GitHub's webhooks to your machine.
+2. Generate a webhook secret, from `backend/`: `.venv/Scripts/python.exe -c "import secrets; print(secrets.token_hex(32))"`
+3. At <https://github.com/settings/apps/new>, create the app:
+   - GitHub App name: `GapScan (dev)`. Homepage URL: `http://localhost:3000`.
+   - Setup URL: `http://localhost:3000/repositories/connect`, and tick "Redirect on update".
+   - Leave Callback URL empty and "Request user authorization (OAuth) during installation" off.
+   - Webhook: active. URL: the smee URL. Secret: the value from step 2.
+   - Repository permissions: Contents read-only. Metadata read-only is added automatically.
+   - Subscribe to events: Push. `installation` and `installation_repositories` have no checkbox, because every app receives them.
+   - Where can this GitHub App be installed: Only on this account.
+4. On the app's page, note the App ID and the slug in `github.com/apps/<slug>`. Under Private keys, choose "Generate a private key" to download a `.pem`.
+5. Copy the key to the clipboard as one line of base64: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("$HOME\Downloads\<downloaded-file>.pem")) | Set-Clipboard`
+6. In the root `.env`, set `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_PRIVATE_KEY_B64` (paste) and `GITHUB_WEBHOOK_SECRET` (step 2). Copy `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` into `SUPABASE_PUBLISHABLE_KEY` as well. Then delete the downloaded `.pem`, since a new key can be generated at any time.
+
+To receive webhooks locally, keep this running in a fourth terminal: `npx smee-client --url <smee URL> --target http://127.0.0.1:8000/api/github/webhook`
 
 ## Run
 
