@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1b: cookie checks
+
+**Added**
+- Checks for the `Secure`, `HttpOnly` and `SameSite` flags, with text and platform fixes. Each check gives one finding listing the affected cookies, so many cookies don't multiply the deduction.
+- `HttpOnly` is only required on session-like cookies, because anti-CSRF and preference cookies are often meant to be read by scripts.
+
+**Security**
+- Only cookie names reach findings. Values can be session tokens, so they are dropped as soon as a header is parsed.
+
 ## 2026-11-08: Phase 1, step 1b: security header checks
 
 **Added**
