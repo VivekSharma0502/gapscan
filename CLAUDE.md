@@ -11,6 +11,7 @@ Security scanner SaaS: website + GitHub repo scanning for students, freelancers,
   1. Update `CHANGELOG.md` (date, what changed, why)
   2. Update `README.md` if setup/commands changed
   3. Commit with a conventional message (`feat:`, `fix:`, `chore:`, `docs:`)
+  4. Once the step is verified (tests, lint and build pass), merge the branch to `main`, push, and delete the branch, unless I say otherwise
 - Ask before adding a new dependency.
 - Write pytest tests for every scanner check and for the SSRF guard.
 - Explain security decisions briefly in code comments — this project is also my portfolio.

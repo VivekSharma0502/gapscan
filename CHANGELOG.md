@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-08: Merge workflow in CLAUDE.md
+
+**Docs**
+- `CLAUDE.md` now says to merge a verified step to `main`, push and delete its branch unless told otherwise, so finished work doesn't sit on branches.
+
 ## 2026-11-08: Results summary for info-only scans
 
 **Changed**
