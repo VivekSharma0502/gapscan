@@ -793,10 +793,10 @@ def test_resolve_fails_closed_when_every_tier_is_partial(tiers: DnsTiers) -> Non
         resolved()
 
 
-def test_only_safe_http_imports_httpx() -> None:
-    """Enforces the project rule that no other app code can make direct HTTP calls."""
+def test_only_safe_http_imports_network_libraries() -> None:
+    """Enforces the project rule that no other app code can reach the network directly."""
     app_dir = Path(safe_http.__file__).resolve().parents[1]
-    pattern = re.compile(r"^\s*(import|from)\s+httpx\b", re.MULTILINE)
+    pattern = re.compile(r"^\s*(import|from)\s+(httpx|socket|ssl|dns)\b", re.MULTILINE)
     offenders = [
         str(path.relative_to(app_dir))
         for path in app_dir.rglob("*.py")

@@ -11,11 +11,15 @@ import ipaddress
 import json
 import re
 import socket
+import ssl
 import time
+import warnings
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any, Literal, TypeVar
 
 import dns.exception
 import dns.resolver
@@ -45,8 +49,27 @@ _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 # name would need the DNS that just failed. Their certificates cover these IPs.
 _DOH_ENDPOINTS = ("https://1.1.1.1/dns-query", "https://8.8.8.8/resolve")
 _DOH_RECORD_TYPES = {"A": 1, "AAAA": 28}
+_DOH_TEXT_RECORD_TYPES = {"TXT": 16, "CAA": 257}
 _DOH_STATUS_OK = 0
 _DOH_STATUS_NXDOMAIN = 3
+# TXT data arrives quoted from some DoH servers, split into chunks of at most 255 bytes.
+_DOH_TXT_CHUNK_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+TextRecordType = Literal["TXT", "CAA"]
+
+_TLS_PORT = 443
+# OpenSSL verification codes, translated so reports don't show OpenSSL's wording.
+_X509_CERT_HAS_EXPIRED = 10
+_X509_FAILURE_DETAILS = {
+    9: "the certificate is not valid yet",
+    18: "the certificate is self-signed",
+    19: "the certificate chain ends in a self-signed certificate",
+    20: "the certificate was issued by an authority browsers do not trust",
+    21: "the server did not send its full certificate chain",
+    62: "the certificate was issued for a different domain",
+}
+# Failures that mean this machine's OpenSSL could not offer the old versions at all.
+_LOCAL_TLS_LIMITS = {"NO_PROTOCOLS_AVAILABLE", "NO_CIPHERS_AVAILABLE"}
 
 # Names that only ever mean something on a private network.
 _BLOCKED_HOSTNAMES = {"localhost"}
@@ -104,6 +127,24 @@ class SafeResponse:
     redirects: tuple[str, ...]
 
 
+class TlsStatus(StrEnum):
+    OK = "ok"
+    EXPIRED = "expired"
+    UNTRUSTED = "untrusted"
+    NO_HTTPS = "no_https"
+
+
+@dataclass(frozen=True)
+class TlsProbe:
+    status: TlsStatus
+    # Plain-language reason when status is not OK.
+    detail: str | None = None
+    protocol: str | None = None
+    not_after: datetime | None = None
+    # None means we could not tell, which is different from the server refusing.
+    legacy_accepted: bool | None = None
+
+
 @dataclass(frozen=True)
 class _Hop:
     status_code: int
@@ -111,6 +152,9 @@ class _Hop:
     content: bytes
     truncated: bool
     location: str | None
+
+
+_T = TypeVar("_T")
 
 
 def is_public_ip(ip: IPAddress) -> bool:
@@ -159,30 +203,50 @@ def _query_dns_servers(host: str, servers: list[str], tcp: bool, budget: float) 
     return addresses
 
 
-def _parse_doh_answer(payload: Any, type_code: int) -> list[IPAddress]:
+def _doh_answer_data(payload: Any, type_code: int) -> list[str]:
     status = payload["Status"]
     if status == _DOH_STATUS_NXDOMAIN:
         return []
     if status != _DOH_STATUS_OK:
         raise _DnsTierFailed
-    # Answers can include CNAME records, which are not addresses.
-    return [
-        ipaddress.ip_address(record["data"])
-        for record in payload.get("Answer", [])
-        if record["type"] == type_code
-    ]
+    # Answers can include CNAME records, which are not the type that was asked for.
+    return [record["data"] for record in payload.get("Answer", []) if record["type"] == type_code]
 
 
-def _query_doh(endpoint: str, host: str, budget: float) -> list[IPAddress]:
+def _parse_doh_answer(payload: Any, type_code: int) -> list[IPAddress]:
+    return [ipaddress.ip_address(data) for data in _doh_answer_data(payload, type_code)]
+
+
+def _unquote_txt(data: str) -> str:
+    chunks = _DOH_TXT_CHUNK_RE.findall(data)
+    if not data.startswith('"') or not chunks:
+        return data
+    return "".join(re.sub(r"\\(.)", r"\1", chunk) for chunk in chunks)
+
+
+def _parse_doh_text_answer(payload: Any, type_code: int) -> list[str]:
+    data = _doh_answer_data(payload, type_code)
+    if type_code == _DOH_TEXT_RECORD_TYPES["TXT"]:
+        return [_unquote_txt(item) for item in data]
+    return data
+
+
+def _doh_lookup(
+    endpoint: str,
+    host: str,
+    record_types: dict[str, int],
+    budget: float,
+    parse: Callable[[Any, int], list[_T]],
+) -> list[_T]:
     # Security: a hardcoded endpoint, with the same TLS checks and size cap as scan traffic.
     tier_deadline = time.monotonic() + budget
     headers = {"Accept": "application/dns-json", "User-Agent": settings.scanner_user_agent}
-    addresses: list[IPAddress] = []
+    results: list[_T] = []
     try:
         with httpx.Client(
             transport=_make_transport(), trust_env=False, follow_redirects=False
         ) as client:
-            for record_type, type_code in _DOH_RECORD_TYPES.items():
+            for record_type, type_code in record_types.items():
                 with client.stream(
                     "GET",
                     endpoint,
@@ -195,7 +259,7 @@ def _query_doh(endpoint: str, host: str, budget: float) -> list[IPAddress]:
                     body, truncated = _read_capped(response, tier_deadline)
                 if truncated:
                     raise _DnsTierFailed
-                addresses.extend(_parse_doh_answer(json.loads(body), type_code))
+                results.extend(parse(json.loads(body), type_code))
     except (
         httpx.HTTPError,
         RequestFailedError,
@@ -205,7 +269,11 @@ def _query_doh(endpoint: str, host: str, budget: float) -> list[IPAddress]:
         AttributeError,
     ) as exc:
         raise _DnsTierFailed from exc
-    return addresses
+    return results
+
+
+def _query_doh(endpoint: str, host: str, budget: float) -> list[IPAddress]:
+    return _doh_lookup(endpoint, host, _DOH_RECORD_TYPES, budget, _parse_doh_answer)
 
 
 def _query_system(host: str, budget: float) -> list[IPAddress]:
@@ -220,6 +288,22 @@ def _query_system(host: str, budget: float) -> list[IPAddress]:
         executor.shutdown(wait=False)
     unique = dict.fromkeys(ipaddress.ip_address(result[4][0]) for result in results)
     return sorted(unique, key=lambda address: address.version)
+
+
+def _first_working_tier(tiers: list[Callable[[float], list[_T]]], deadline: float) -> list[_T]:
+    for tier in tiers:
+        budget = min(settings.scanner_dns_timeout_seconds, deadline - time.monotonic())
+        if budget <= 0:
+            break
+        try:
+            # Security: answers are never merged across resolvers. A resolver that returned
+            # only some records could otherwise hide a private address. Whatever comes back
+            # still goes through the IP checks in _validated_ip, and a private answer
+            # blocks the request instead of moving on to ask another resolver.
+            return tier(budget)
+        except _DnsTierFailed:
+            continue
+    raise RequestFailedError("DNS lookup failed")
 
 
 def _resolve(host: str, deadline: float) -> list[IPAddress]:
@@ -237,20 +321,19 @@ def _resolve(host: str, deadline: float) -> list[IPAddress]:
         lambda budget: _query_doh(_DOH_ENDPOINTS[1], host, budget),
         lambda budget: _query_system(host, budget),
     ]
+    return _first_working_tier(tiers, deadline)
 
-    for tier in tiers:
-        budget = min(settings.scanner_dns_timeout_seconds, deadline - time.monotonic())
-        if budget <= 0:
-            break
-        try:
-            # Security: answers are never merged across resolvers. A resolver that returned
-            # only some records could otherwise hide a private address. Whatever comes back
-            # still goes through the IP checks in _validated_ip, and a private answer
-            # blocks the request instead of moving on to ask another resolver.
-            return tier(budget)
-        except _DnsTierFailed:
-            continue
-    raise RequestFailedError("DNS lookup failed")
+
+def _validated_name(host: str) -> str:
+    """Return host without a trailing dot, or raise if it is not an allowed domain name."""
+    name = host.rstrip(".")
+    if not _HOSTNAME_RE.fullmatch(name):
+        raise BlockedTargetError("invalid host")
+    if _NUMERIC_LAST_LABEL_RE.fullmatch(name.rsplit(".", 1)[-1]):
+        raise BlockedTargetError("address not allowed")
+    if name in _BLOCKED_HOSTNAMES or name.endswith(_BLOCKED_SUFFIXES):
+        raise BlockedTargetError("host not allowed")
+    return name
 
 
 def _validated_ip(host: str, deadline: float) -> IPAddress:
@@ -267,15 +350,7 @@ def _validated_ip(host: str, deadline: float) -> IPAddress:
             raise BlockedTargetError("address not allowed")
         return literal
 
-    name = host.rstrip(".")
-    if not _HOSTNAME_RE.fullmatch(name):
-        raise BlockedTargetError("invalid host")
-    if _NUMERIC_LAST_LABEL_RE.fullmatch(name.rsplit(".", 1)[-1]):
-        raise BlockedTargetError("address not allowed")
-    if name in _BLOCKED_HOSTNAMES or name.endswith(_BLOCKED_SUFFIXES):
-        raise BlockedTargetError("host not allowed")
-
-    addresses = _resolve(name, deadline)
+    addresses = _resolve(_validated_name(host), deadline)
     if not addresses:
         raise RequestFailedError("host did not resolve")
     # Security: refuse if any record is private. Picking only the public ones would let
@@ -397,3 +472,162 @@ def safe_get(url: str) -> SafeResponse:
 
 def safe_head(url: str) -> SafeResponse:
     return _fetch("HEAD", url)
+
+
+def _make_tls_context() -> ssl.SSLContext:
+    # The same trust store as scan traffic, so this probe and safe_get agree on validity.
+    return httpx.create_ssl_context(trust_env=False)
+
+
+def _make_legacy_tls_context() -> ssl.SSLContext | None:
+    """Return a context offering only TLS 1.0/1.1, or None if this OpenSSL cannot do that."""
+    if not (ssl.HAS_TLSv1 or ssl.HAS_TLSv1_1):
+        return None
+    # Security: verification is off because this connection only asks "would you agree to an
+    # old protocol?". Nothing is sent over it and no data is read from it.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            context.minimum_version = ssl.TLSVersion.TLSv1
+            context.maximum_version = ssl.TLSVersion.TLSv1_1
+        # Modern OpenSSL hides the old ciphers unless the security level is lowered.
+        context.set_ciphers("DEFAULT:@SECLEVEL=0")
+    except (ValueError, ssl.SSLError):
+        return None
+    return context
+
+
+def _tls_handshake(
+    ip: IPAddress, name: str, context: ssl.SSLContext, deadline: float
+) -> ssl.SSLSocket:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RequestFailedError("deadline exceeded")
+    # Security: connects to the validated IP on 443 only, for the same reason as _send_pinned.
+    raw = socket.create_connection(
+        (str(ip), _TLS_PORT), timeout=min(CONNECT_TIMEOUT_SECONDS, remaining)
+    )
+    try:
+        raw.settimeout(min(READ_TIMEOUT_SECONDS, remaining))
+        return context.wrap_socket(raw, server_hostname=name)
+    except BaseException:
+        raw.close()
+        raise
+
+
+def _accepts_legacy_tls(ip: IPAddress, name: str, deadline: float) -> bool | None:
+    context = _make_legacy_tls_context()
+    if context is None:
+        return None
+    try:
+        with _tls_handshake(ip, name, context, deadline):
+            return True
+    except ssl.SSLError as exc:
+        return None if getattr(exc, "reason", None) in _LOCAL_TLS_LIMITS else False
+    except ConnectionError:
+        return False  # many servers just drop a client offering only old protocols
+    except (OSError, RequestFailedError):
+        return None
+
+
+def _cert_expiry(cert: Any) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(ssl.cert_time_to_seconds(cert["notAfter"]), UTC)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _failed_verification(exc: ssl.SSLCertVerificationError) -> tuple[TlsStatus, str]:
+    if exc.verify_code == _X509_CERT_HAS_EXPIRED:
+        return TlsStatus.EXPIRED, "the certificate has expired"
+    detail = _X509_FAILURE_DETAILS.get(exc.verify_code, "the certificate could not be verified")
+    return TlsStatus.UNTRUSTED, detail
+
+
+def safe_tls_probe(host: str) -> TlsProbe:
+    """Inspect a host's TLS setup with handshakes only. No HTTP request is sent.
+
+    Raises BlockedTargetError for a disallowed host, and RequestFailedError when the
+    result is unknown, such as a timeout. A definite problem is returned as a status.
+    """
+    deadline = time.monotonic() + TOTAL_DEADLINE_SECONDS
+    # Security: the same URL, DNS and IP validation as an HTTP request.
+    name = _parse_url(f"https://{host}/").raw_host.decode("ascii").rstrip(".")
+    ip = _validated_ip(name, deadline)
+
+    try:
+        with _tls_handshake(ip, name, _make_tls_context(), deadline) as connection:
+            protocol, cert = connection.version(), connection.getpeercert()
+    except ssl.SSLCertVerificationError as exc:
+        status, detail = _failed_verification(exc)
+        return TlsProbe(status, detail, legacy_accepted=_accepts_legacy_tls(ip, name, deadline))
+    except ConnectionRefusedError:
+        return TlsProbe(TlsStatus.NO_HTTPS, "port 443 refused the connection")
+    except ssl.SSLEOFError as exc:
+        raise RequestFailedError("TLS probe failed") from exc  # dropped, which proves nothing
+    except ssl.SSLError:
+        detail = "the server did not complete a modern TLS handshake"
+        return TlsProbe(
+            TlsStatus.NO_HTTPS, detail, legacy_accepted=_accepts_legacy_tls(ip, name, deadline)
+        )
+    except OSError as exc:
+        raise RequestFailedError("TLS probe failed") from exc
+
+    return TlsProbe(
+        TlsStatus.OK,
+        protocol=protocol,
+        not_after=_cert_expiry(cert),
+        legacy_accepted=_accepts_legacy_tls(ip, name, deadline),
+    )
+
+
+def _text_record_data(record: Any, record_type: TextRecordType) -> str:
+    if record_type == "TXT":
+        return b"".join(record.strings).decode("utf-8", "replace")
+    return record.to_text()
+
+
+def _query_text_records(
+    name: str, record_type: TextRecordType, servers: list[str], tcp: bool, budget: float
+) -> list[str]:
+    try:
+        resolver = dns.resolver.Resolver(configure=not servers)
+        if servers:
+            resolver.nameservers = servers
+        resolver.lifetime = budget
+        try:
+            answer = resolver.resolve(name, record_type, tcp=tcp)
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+            return []
+        return [_text_record_data(record, record_type) for record in answer]
+    except dns.exception.DNSException as exc:
+        raise _DnsTierFailed from exc
+
+
+def safe_dns_records(name: str, record_type: TextRecordType) -> list[str]:
+    """Return a name's TXT or CAA records. An empty list means there are none.
+
+    Uses the same fallback chain as address lookups, minus the operating system, which
+    can only answer for addresses. Raises RequestFailedError if every resolver fails.
+    """
+    deadline = time.monotonic() + TOTAL_DEADLINE_SECONDS
+    # Security: names are validated like hostnames so scan input can't probe internal zones.
+    validated = _validated_name(name)
+    servers = [str(server) for server in settings.scanner_dns_servers]
+    types = {record_type: _DOH_TEXT_RECORD_TYPES[record_type]}
+
+    def doh_tier(endpoint: str) -> Callable[[float], list[str]]:
+        return lambda budget: _doh_lookup(
+            endpoint, validated, types, budget, _parse_doh_text_answer
+        )
+
+    tiers: list[Callable[[float], list[str]]] = [
+        lambda budget: _query_text_records(validated, record_type, servers, False, budget),
+        lambda budget: _query_text_records(validated, record_type, servers, True, budget),
+        doh_tier(_DOH_ENDPOINTS[0]),
+        doh_tier(_DOH_ENDPOINTS[1]),
+    ]
+    return _first_working_tier(tiers, deadline)

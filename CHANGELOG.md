@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1b: TLS probe and DNS records in the SSRF guard
+
+**Added**
+- `safe_tls_probe` reads certificate status, expiry, negotiated protocol and whether TLS 1.0/1.1 is accepted, using handshakes only, so it stays passive. Certificate details come from Python's `ssl`, so no new dependency was needed.
+- `safe_dns_records` reads TXT and CAA records through the same fallback chain as address lookups, because the development network blocks UDP DNS.
+
+**Security**
+- The probe uses the same URL, DNS and IP checks as HTTP requests, pins the validated IP, and only connects to port 443.
+- A timeout or dropped connection raises instead of reporting a problem, so an unknown result can't be mistaken for "no HTTPS".
+- The guard test now also fails if other app code imports `socket`, `ssl` or `dns`.
+
 ## 2026-11-08: Phase 1, step 1b: check registry and scoring
 
 **Added**
