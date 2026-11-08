@@ -4,7 +4,7 @@ import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -71,10 +71,19 @@ class QuickScanCreated(BaseModel):
     claim_token: str | None
 
 
+class ProgressStep(BaseModel):
+    # Security: a fixed shape with no result field. "done" means the step ran, not that it
+    # passed, so the log can't reveal findings hidden from anonymous viewers.
+    name: str
+    status: Literal["done", "running"]
+
+
 class ScanProgress(BaseModel):
     completed: int
     total: int
     current: str | None
+    # Defaults to empty because scans saved before this field existed don't have it.
+    steps: list[ProgressStep] = []
 
 
 class FindingOut(BaseModel):
@@ -98,6 +107,8 @@ class ScanOut(BaseModel):
     score_label: str | None
     incomplete_reason: str | None
     findings: list[FindingOut]
+    # Every finding, including those cut from a teaser. The count reveals no details.
+    total_findings: int
     skipped: list[SkippedCheck]
     # True when findings are cut to the top few, so the UI can offer the full report.
     teaser: bool
@@ -266,6 +277,7 @@ def get_scan(scan_id: UUID, session: SessionDep, viewer_id: ViewerDep) -> ScanOu
         score_label=scan.score_label,
         incomplete_reason=scan.incomplete_reason,
         findings=[_finding_out(record) for record in shown],
+        total_findings=len(records),
         skipped=[SkippedCheck(**item) for item in scan.skipped_json] if is_owner else [],
         teaser=not is_owner,
     )

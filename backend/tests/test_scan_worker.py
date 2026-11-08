@@ -95,11 +95,34 @@ def test_progress_is_written_for_every_step(
     assert [write["completed"] for write in writes] == list(range(total))
     assert {write["total"] for write in writes} == {total}
     assert [write["current"] for write in writes[:4]] == list(COLLECT_STEPS)
-    assert load(db_engine, scan_id).progress_json == {
-        "completed": total,
-        "total": total,
-        "current": None,
-    }
+    final = load(db_engine, scan_id).progress_json
+    assert (final["completed"], final["total"], final["current"]) == (total, total, None)
+    assert [step["name"] for step in final["steps"]] == [
+        *COLLECT_STEPS,
+        *(spec.check_id for spec in selected_checks()),
+    ]
+    assert {step["status"] for step in final["steps"]} == {"done"}
+
+
+def test_step_log_keeps_earlier_steps_and_marks_only_the_current_one_running(
+    db_engine: Engine, collected: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scan_id = add_scan(db_engine)
+    writes: list[dict[str, Any]] = []
+    real_update = tasks._update_running
+
+    def spy(job_id: UUID, **values: Any) -> None:
+        writes.append(values["progress_json"])
+        real_update(job_id, **values)
+
+    monkeypatch.setattr(tasks, "_update_running", spy)
+
+    run_quick_scan(str(scan_id))
+
+    for index, write in enumerate(writes):
+        assert len(write["steps"]) == index + 1
+        assert write["steps"][-1] == {"name": write["current"], "status": "running"}
+        assert all(step["status"] == "done" for step in write["steps"][:-1])
 
 
 def test_progress_never_contains_results(
@@ -117,7 +140,37 @@ def test_progress_never_contains_results(
 
     run_quick_scan(str(scan_id))
 
-    assert all(set(write) == {"completed", "total", "current"} for write in writes)
+    writes.append(load(db_engine, scan_id).progress_json)
+    assert all(set(write) == {"completed", "total", "current", "steps"} for write in writes)
+    # Security: each step says only that it ran. Checks that did and didn't produce a
+    # finding must look identical here, or the log would reveal hidden findings.
+    for write in writes:
+        for step in write["steps"]:
+            assert set(step) == {"name", "status"}
+            assert step["status"] in {"done", "running"}
+
+
+def test_step_log_is_the_same_whether_or_not_a_check_found_something(
+    db_engine: Engine, collected: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    check_id = next(iter(CATALOG))
+    finding = Finding(
+        check_id=check_id,
+        category=Category.TLS,
+        severity=Severity.CRITICAL,
+        title=CATALOG[check_id].title,
+        evidence="evidence text",
+        fix=CATALOG[check_id].fix,
+    )
+
+    def run_with(result: Finding | None) -> list[dict[str, str]]:
+        spec = CheckSpec(check_id, Category.TLS, lambda _ctx: result, frozenset())
+        monkeypatch.setattr(runner, "all_checks", lambda: [spec])
+        scan_id = add_scan(db_engine)
+        run_quick_scan(str(scan_id))
+        return load(db_engine, scan_id).progress_json["steps"]
+
+    assert run_with(finding) == run_with(None)
 
 
 def test_scan_that_is_not_queued_does_not_run(db_engine: Engine, collected: list[str]) -> None:

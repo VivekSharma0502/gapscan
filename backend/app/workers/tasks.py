@@ -1,6 +1,7 @@
 """Background scan jobs."""
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -15,10 +16,16 @@ from app.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-def _progress(completed: int, total: int, current: str | None) -> dict[str, Any]:
-    # Security: counts and the step name only. A per-check result here would reveal
-    # the findings that anonymous viewers don't get to see.
-    return {"completed": completed, "total": total, "current": current}
+def _progress(
+    completed: int, total: int, current: str | None, finished: Sequence[str] = ()
+) -> dict[str, Any]:
+    # Security: counts, step names and done/running only. "done" means the step ran, not
+    # that it passed. A pass/fail or severity here would reveal the findings that anonymous
+    # viewers don't get to see.
+    steps = [{"name": name, "status": "done"} for name in finished]
+    if current is not None:
+        steps.append({"name": current, "status": "running"})
+    return {"completed": completed, "total": total, "current": current, "steps": steps}
 
 
 def initial_quick_progress() -> dict[str, Any]:
@@ -53,7 +60,7 @@ def _update_running(scan_id: UUID, **values: Any) -> None:
         session.commit()
 
 
-def _save_report(scan_id: UUID, report: ScanReport, total: int) -> None:
+def _save_report(scan_id: UUID, report: ScanReport, total: int, steps: Sequence[str]) -> None:
     # Findings and the final status commit together, so nobody can read a half-saved report.
     with new_session() as session:
         result = session.exec(
@@ -67,7 +74,7 @@ def _save_report(scan_id: UUID, report: ScanReport, total: int) -> None:
                 score_label=report.score_label,
                 incomplete_reason=report.incomplete_reason,
                 skipped_json=[item.model_dump() for item in report.skipped],
-                progress_json=_progress(total, total, None),
+                progress_json=_progress(total, total, None, steps),
                 finished_at=utc_now(),
             )
         )
@@ -97,18 +104,18 @@ def run_quick_scan(scan_id: str) -> None:
         return
 
     total = initial_quick_progress()["total"]
-    started = 0
+    # Sent whole on every update, because checks finish faster than the page polls.
+    finished: list[str] = []
 
     def on_step(step: str) -> None:
-        nonlocal started
-        _update_running(job_id, progress_json=_progress(started, total, step))
-        started += 1
+        _update_running(job_id, progress_json=_progress(len(finished), total, step, finished))
+        finished.append(step)
 
     try:
         # Security: allow_active stays off. Quick scans run on domains nobody has verified.
         context = collect_context(target, on_step=on_step)
         report = run_checks(context, on_step=on_step)
-        _save_report(job_id, report, total)
+        _save_report(job_id, report, total, finished)
     except Exception as exc:
         # Security: only the error type is logged, since the message could echo site content.
         logger.error("scan %s failed: %s", scan_id, type(exc).__name__)

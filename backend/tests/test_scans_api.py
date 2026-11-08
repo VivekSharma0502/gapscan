@@ -420,7 +420,15 @@ def test_partial_score_keeps_its_label(client: TestClient, db_engine: Engine) ->
 
 
 def test_progress_is_returned_while_running(client: TestClient, db_engine: Engine) -> None:
-    progress = {"completed": 2, "total": 29, "current": "http_fetch"}
+    progress = {
+        "completed": 1,
+        "total": 29,
+        "current": "https_fetch",
+        "steps": [
+            {"name": "tls_probe", "status": "done"},
+            {"name": "https_fetch", "status": "running"},
+        ],
+    }
     scan_id = add_scan(db_engine, status=ScanJobStatus.RUNNING, progress_json=progress)
 
     body = client.get(f"/api/scans/{scan_id}").json()
@@ -429,6 +437,43 @@ def test_progress_is_returned_while_running(client: TestClient, db_engine: Engin
     assert body["progress"] == progress
     assert body["score"] is None
     assert body["findings"] == []
+
+
+def test_progress_saved_before_the_step_log_still_loads(
+    client: TestClient, db_engine: Engine
+) -> None:
+    progress = {"completed": 2, "total": 29, "current": "http_fetch"}
+    scan_id = add_scan(db_engine, status=ScanJobStatus.RUNNING, progress_json=progress)
+
+    assert client.get(f"/api/scans/{scan_id}").json()["progress"]["steps"] == []
+
+
+def test_step_log_response_cannot_carry_results(client: TestClient, db_engine: Engine) -> None:
+    # Security: even if a result were ever stored with a step, the response must drop it.
+    progress = {
+        "completed": 1,
+        "total": 29,
+        "current": None,
+        "steps": [{"name": "tls_probe", "status": "done", "severity": "high", "passed": False}],
+    }
+    scan_id = add_scan(db_engine, status=ScanJobStatus.RUNNING, progress_json=progress)
+
+    body = client.get(f"/api/scans/{scan_id}").json()
+
+    assert body["progress"]["steps"] == [{"name": "tls_probe", "status": "done"}]
+
+
+def test_total_findings_counts_findings_hidden_from_the_teaser(
+    client: TestClient, db_engine: Engine
+) -> None:
+    scan_id = add_scan(db_engine)
+    for check_id in CHECK_IDS[:5]:
+        add_finding(db_engine, scan_id, check_id, Severity.LOW)
+
+    body = client.get(f"/api/scans/{scan_id}").json()
+
+    assert len(body["findings"]) == 3
+    assert body["total_findings"] == 5
 
 
 @pytest.mark.parametrize("scan_status", [ScanJobStatus.QUEUED, ScanJobStatus.RUNNING])

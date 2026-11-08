@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1d: step log and finding count in the scan API
+
+**Added**
+- `progress.steps` lists every step so far with `done` or `running`, sent whole on each poll. Checks finish in milliseconds, so a page polling once a second would otherwise miss nearly all of them.
+- `total_findings` gives the number of findings on a scan, so the teaser can say how many are hidden.
+
+**Security**
+- A step holds only its name and `done` or `running`, never pass/fail or severity. `done` means the check ran, so the log looks the same whether or not a check found anything. Tests enforce this, and the response model drops anything else stored with a step.
+
 ## 2026-11-08: Phase 1, step 1c: quick scan routes
 
 **Added**
