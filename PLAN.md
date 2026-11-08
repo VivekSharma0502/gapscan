@@ -103,8 +103,9 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - **domains**: id, owner_id, hostname, verify_token, verified_at, created_at
 - **github_installations**: id, owner_id, installation_id, account_login, created_at
 - **repos**: id, owner_id, installation_id, full_name, is_private, created_at
-- **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, target, mode (quick|full), status (queued|running|done|failed), progress_json, score, grade, started_at, finished_at
+- **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, target, mode (quick|full), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
 - **findings**: id, scan_id, check_id, category, severity (critical|high|medium|low|info), title, evidence_masked, location, linked_finding_id, created_at
+- **scan_claims**: id, scan_id, token_hash, created_at (one per anonymous request, redeemed after signup in Phase 2)
 - **notification_settings**: owner_id, email_enabled, telegram_chat_id, min_severity
 - Check text (what it means / fixes per platform) lives in code, keyed by `check_id`.
 

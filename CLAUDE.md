@@ -27,7 +27,7 @@ Windows PowerShell. Backend commands run from `backend/`, frontend commands from
 
 | Task | Command |
 |---|---|
-| Redis | `docker compose up -d redis` (from repo root) |
+| Redis + Postgres | `docker compose up -d redis postgres` (from repo root) |
 | API dev server | `.venv/Scripts/python.exe -m uvicorn app.main:app --reload --port 8000` |
 | Web dev server | `npm run dev` |
 | Backend tests | `.venv/Scripts/python.exe -m pytest` |
@@ -35,4 +35,4 @@ Windows PowerShell. Backend commands run from `backend/`, frontend commands from
 | Frontend lint | `npm run lint` |
 | Frontend build | `npm run build` |
 | Worker | Not available yet. Celery is added when scans need it (Phase 1). |
-| Migrations | Not available yet. Alembic is added with the first tables. |
+| Migrations | `.venv/Scripts/python.exe -m alembic upgrade head` |

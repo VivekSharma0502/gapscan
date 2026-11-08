@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1c: Postgres, scan tables and migrations
+
+**Added**
+- Local Postgres in `docker-compose.yml`, published on loopback only like Redis.
+- `scans`, `findings` and `scan_claims` tables with Alembic migrations, so scan jobs and results can outlive a request. Run `pip install -r requirements-dev.txt`, then `alembic upgrade head`.
+- `scans.result_status` sits beside the job `status`, because a job can finish while the scan itself was partial or incomplete.
+
+**Changed**
+- Local service URLs use `127.0.0.1`. The containers are published on IPv4 only, and on Windows `localhost` tries IPv6 first, which stalled every new Postgres connection. Update `REDIS_URL` in your `.env` to match.
+
+**Security**
+- Scan ids are random UUIDs, because anyone holding the id can read the teaser.
+- Claim tokens are stored only as hashes, one per requester, so a leaked database can't be used to claim scans and shared scans never share a token.
+- Row level security is on for all three tables. Supabase publishes public tables through its REST API, and RLS with no policies closes that path.
+- Alembic reads the database URL from settings, so credentials stay out of `alembic.ini`.
+
 ## 2026-11-08: Phase 1, step 1b: fairer scan outcomes
 
 **Fixed**

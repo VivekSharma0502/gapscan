@@ -10,7 +10,7 @@ See `PLAN.md` for scope and roadmap, and `CHANGELOG.md` for history.
 |---|---|
 | `frontend/` | Next.js (App Router), TypeScript, Tailwind, shadcn/ui |
 | `backend/` | FastAPI, SQLModel |
-| `docker-compose.yml` | Redis for local development |
+| `docker-compose.yml` | Redis and Postgres for local development |
 
 ## Prerequisites
 
@@ -27,16 +27,23 @@ Commands are for Windows PowerShell, run from the repo root.
 Copy-Item .env.example .env
 "NEXT_PUBLIC_API_URL=http://localhost:8000" | Out-File -Encoding ascii frontend/.env.local
 
-# 2. Redis
-docker compose up -d redis
+# 2. Redis and Postgres
+docker compose up -d redis postgres
 
 # 3. Backend
 python -m venv backend/.venv
 backend/.venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt
 
-# 4. Frontend
+# 4. Database tables, from backend/
+cd backend
+.venv/Scripts/python.exe -m alembic upgrade head
+cd ..
+
+# 5. Frontend
 npm --prefix frontend install
 ```
+
+After pulling changes that add a migration, run `alembic upgrade head` again. To create one after changing a model, run `.venv/Scripts/python.exe -m alembic revision --autogenerate -m "describe the change"` from `backend/` and review the generated file.
 
 Scan DNS lookups fall back automatically from UDP to TCP, DNS-over-HTTPS and then the operating system. If your network blocks UDP DNS, set `SCANNER_DNS_SERVERS=1.1.1.1,8.8.8.8` and a lower `SCANNER_DNS_TIMEOUT_SECONDS` in `.env` to reach the working fallback sooner.
 
