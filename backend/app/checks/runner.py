@@ -64,7 +64,7 @@ def selected_checks(allow_active: bool = False) -> list[CheckSpec]:
 def run_checks(
     ctx: ScanContext, *, on_step: StepCallback | None = None, allow_active: bool = False
 ) -> ScanReport:
-    """Run the checks. Security: active checks are opt-in, so a caller can't run them by accident."""
+    """Run the checks. Security: active checks are opt-in, so none run by accident."""
     findings: list[Finding] = []
     skipped: list[SkippedCheck] = []
 

@@ -49,19 +49,25 @@ Scan DNS lookups fall back automatically from UDP to TCP, DNS-over-HTTPS and the
 
 ## Run
 
-Use two terminals.
+Use three terminals.
 
 ```powershell
 # Terminal 1: API on http://localhost:8000
 cd backend
 .venv/Scripts/python.exe -m uvicorn app.main:app --reload --port 8000
 
-# Terminal 2: web app on http://localhost:3000
+# Terminal 2: scan worker
+cd backend
+.venv/Scripts/python.exe -m celery -A app.workers.celery_app worker --pool=solo --loglevel=info
+
+# Terminal 3: web app on http://localhost:3000
 cd frontend
 npm run dev
 ```
 
 Open http://localhost:3000. The page should show **API status: OK**.
+
+The worker runs the scans, so without it they stay queued and are marked failed after 5 minutes. `--pool=solo` is required on Windows, where Celery's default pool doesn't work, and runs one scan at a time. Restart the worker after changing its code, because it doesn't reload.
 
 ## Tests and lint
 

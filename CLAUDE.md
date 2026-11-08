@@ -34,5 +34,5 @@ Windows PowerShell. Backend commands run from `backend/`, frontend commands from
 | Backend lint | `.venv/Scripts/python.exe -m ruff check .` and `.venv/Scripts/python.exe -m ruff format --check .` |
 | Frontend lint | `npm run lint` |
 | Frontend build | `npm run build` |
-| Worker | Not available yet. Celery is added when scans need it (Phase 1). |
+| Worker | `.venv/Scripts/python.exe -m celery -A app.workers.celery_app worker --pool=solo --loglevel=info` |
 | Migrations | `.venv/Scripts/python.exe -m alembic upgrade head` |

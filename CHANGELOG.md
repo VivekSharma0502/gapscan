@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1c: Celery scan worker
+
+**Added**
+- A Celery worker runs quick scans, saves progress for every step, and stores the report and findings in one transaction, so nobody can read a half-saved result.
+- Starting a scan is one atomic update, so a redelivered task can't run it twice, and a late worker can't overwrite a scan that has already expired.
+
+**Security**
+- Celery accepts JSON only, because accepting pickle would let anyone who can write to Redis run code.
+- The job carries only the scan id, and the target is read from the database.
+- Progress holds counts and the step name only. Per-check results there would reveal findings hidden from anonymous viewers.
+- Failures log only the error type, since the message could echo site content.
+
 ## 2026-11-08: Phase 1, step 1c: progress callbacks and passive-only gate
 
 **Added**

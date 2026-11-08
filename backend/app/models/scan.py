@@ -1,6 +1,6 @@
 """Tables for scan jobs, their findings, and claims on anonymous scans."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
@@ -11,12 +11,19 @@ from sqlmodel import Field, SQLModel
 from app.checks.base import Category, Severity
 from app.checks.runner import ScanStatus
 
+# A scan still unfinished after this long has lost its worker. Celery's time limits don't
+# work with the solo pool used on Windows, so scans are expired by age as well.
+SCAN_STALE_AFTER = timedelta(minutes=5)
+
 
 class ScanJobStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
+
+
+UNFINISHED_STATUSES = (ScanJobStatus.QUEUED, ScanJobStatus.RUNNING)
 
 
 class TargetType(StrEnum):
@@ -29,7 +36,7 @@ class ScanMode(StrEnum):
     FULL = "full"
 
 
-def _utc_now() -> datetime:
+def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
@@ -77,7 +84,7 @@ class Scan(SQLModel, table=True):
     score_label: str | None = None
     incomplete_reason: str | None = None
     skipped_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=_utc_now, sa_column=_timestamp_column())
+    created_at: datetime = Field(default_factory=utc_now, sa_column=_timestamp_column())
     started_at: datetime | None = Field(default=None, sa_column=_timestamp_column(nullable=True))
     finished_at: datetime | None = Field(default=None, sa_column=_timestamp_column(nullable=True))
 
@@ -103,7 +110,7 @@ class FindingRecord(SQLModel, table=True):
         default=None,
         sa_column=Column(Uuid, ForeignKey("findings.id", ondelete="SET NULL"), nullable=True),
     )
-    created_at: datetime = Field(default_factory=_utc_now, sa_column=_timestamp_column())
+    created_at: datetime = Field(default_factory=utc_now, sa_column=_timestamp_column())
 
 
 class ScanClaim(SQLModel, table=True):
@@ -124,4 +131,4 @@ class ScanClaim(SQLModel, table=True):
     )
     # Security: only the hash is stored, so a database leak can't be used to claim scans.
     token_hash: str = Field(max_length=64, unique=True)
-    created_at: datetime = Field(default_factory=_utc_now, sa_column=_timestamp_column())
+    created_at: datetime = Field(default_factory=utc_now, sa_column=_timestamp_column())
