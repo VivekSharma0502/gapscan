@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1b: TLS checks
+
+**Added**
+- Checks for missing HTTPS, expired, untrusted and soon-to-expire certificates, TLS 1.0/1.1, missing HTTP to HTTPS redirect, and missing or short HSTS, each with plain-language text and fixes for Vercel, Netlify, nginx and Cloudflare.
+- `SkipCheck`, so a check that can't get a reliable answer is reported as skipped, not passed.
+
 ## 2026-11-08: Phase 1, step 1b: TLS probe and DNS records in the SSRF guard
 
 **Added**

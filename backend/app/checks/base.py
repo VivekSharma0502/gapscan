@@ -6,11 +6,12 @@ collector, so checks can be tested with fixtures and cannot bypass the SSRF guar
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from app.core.safe_http import SafeResponse
+from app.core.safe_http import SafeResponse, TlsProbe
 
 
 class Severity(StrEnum):
@@ -83,6 +84,11 @@ class Input(StrEnum):
 
     HTTPS = "https"
     HTTP = "http"
+    TLS = "tls"
+
+
+class SkipCheck(Exception):
+    """Raised by a check that has its inputs but still cannot give a reliable answer."""
 
 
 @dataclass(frozen=True)
@@ -92,5 +98,8 @@ class ScanContext:
     hostname: str
     https: SafeResponse | None = None
     http: SafeResponse | None = None
+    tls: TlsProbe | None = None
     # Why an input is missing, shown to the user next to the checks it prevented.
     skip_reasons: Mapping[Input, str] = field(default_factory=dict)
+    # Part of the context so expiry checks give the same answer every time in tests.
+    checked_at: datetime = field(default_factory=lambda: datetime.now(UTC))
