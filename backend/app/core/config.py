@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import IPvAnyAddress, field_validator
+from pydantic import Field, IPvAnyAddress, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # DNS servers for scan lookups. Empty means use the system's DNS. Security: public
     # resolvers keep scans from seeing internal names served by the host's own DNS.
     scanner_dns_servers: Annotated[list[IPvAnyAddress], NoDecode] = []
+
+    # How long each resolver in the fallback chain gets, in seconds.
+    scanner_dns_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
 
     @field_validator("cors_origins", "scanner_dns_servers", mode="before")
     @classmethod

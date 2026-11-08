@@ -3,6 +3,7 @@
 import gzip
 import ipaddress
 import re
+import socket
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -39,7 +40,9 @@ class FakeNet:
         self.requests: list[httpx.Request] = []
         self.lookups: list[str] = []
 
-    def resolve(self, host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    def resolve(
+        self, host: str, deadline: float
+    ) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
         self.lookups.append(host)
         return [ipaddress.ip_address(address) for address in self.dns.get(host, [])]
 
@@ -415,10 +418,65 @@ class FakeRecord:
         self.address = address
 
 
-def fake_resolver(
-    monkeypatch: pytest.MonkeyPatch, answers: dict[str, list[str] | Exception]
-) -> list[Any]:
-    created: list[Any] = []
+Answers = dict[str, list[str] | Exception]
+FULL_CHAIN = ["udp", "tcp", "doh:1.1.1.1", "doh:8.8.8.8", "system"]
+CONFIGURED = [ipaddress.ip_address("1.1.1.1"), ipaddress.ip_address("8.8.8.8")]
+
+
+def dns_down() -> Answers:
+    return {"A": dns.exception.Timeout(), "AAAA": dns.exception.Timeout()}
+
+
+def dns_ok(*addresses: str) -> Answers:
+    return {"A": list(addresses), "AAAA": dns.resolver.NoAnswer()}
+
+
+def doh_json(
+    a: tuple[str, ...] = (), aaaa: tuple[str, ...] = (), status: int = 0
+) -> Callable[[httpx.Request], httpx.Response]:
+    def respond(request: httpx.Request) -> httpx.Response:
+        wanted = request.url.params["type"]
+        code, data = (1, a) if wanted == "A" else (28, aaaa)
+        records = [{"name": "example.com", "type": code, "data": item} for item in data]
+        return httpx.Response(200, json={"Status": status, "Answer": records})
+
+    return respond
+
+
+class DnsTiers:
+    """Fakes each resolver in the chain. All of them fail until a test says otherwise."""
+
+    def __init__(self) -> None:
+        self.udp: Answers = dns_down()
+        self.tcp: Answers = dns_down()
+        self.doh: dict[str, Route] = {}
+        self.system: list[str] | Exception = socket.gaierror(11001, "failed")
+        self.log: list[str] = []
+        self.resolvers: list[Any] = []
+        self.doh_requests: list[httpx.Request] = []
+
+    def note(self, tier: str) -> None:
+        if not self.log or self.log[-1] != tier:
+            self.log.append(tier)
+
+    def handle_doh(self, request: httpx.Request) -> httpx.Response:
+        self.doh_requests.append(request)
+        self.note(f"doh:{request.url.host}")
+        route = self.doh.get(request.url.host)
+        if route is None:
+            raise httpx.ConnectError("blocked")
+        return route(request) if callable(route) else route
+
+    def getaddrinfo(self, host: str, port: None, **kwargs: Any) -> list[Any]:
+        self.note("system")
+        if isinstance(self.system, Exception):
+            raise self.system
+        return [(0, 1, 6, "", (address, 0)) for address in self.system]
+
+
+@pytest.fixture
+def tiers(monkeypatch: pytest.MonkeyPatch) -> DnsTiers:
+    fake = DnsTiers()
 
     class Resolver:
         lifetime = 0.0
@@ -426,33 +484,271 @@ def fake_resolver(
         def __init__(self, configure: bool = True) -> None:
             self.configure = configure
             self.nameservers = ["system-dns"] if configure else []
-            created.append(self)
+            fake.resolvers.append(self)
 
-        def resolve(self, host: str, record_type: str) -> list[FakeRecord]:
-            answer = answers[record_type]
+        def resolve(self, host: str, record_type: str, tcp: bool = False) -> list[FakeRecord]:
+            fake.note("tcp" if tcp else "udp")
+            answer = (fake.tcp if tcp else fake.udp)[record_type]
             if isinstance(answer, Exception):
                 raise answer
             return [FakeRecord(address) for address in answer]
 
     monkeypatch.setattr(dns.resolver, "Resolver", Resolver)
-    return created
+    monkeypatch.setattr(safe_http, "_make_transport", lambda: httpx.MockTransport(fake.handle_doh))
+    monkeypatch.setattr(safe_http.socket, "getaddrinfo", fake.getaddrinfo)
+    monkeypatch.setattr(safe_http.settings, "scanner_dns_servers", CONFIGURED)
+    monkeypatch.setattr(safe_http.settings, "scanner_dns_timeout_seconds", 5.0)
+    return fake
 
 
-def test_resolve_uses_system_dns_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def far_deadline() -> float:
+    return time.monotonic() + 60
+
+
+def resolved(host: str = "example.com") -> list[str]:
+    return [str(address) for address in safe_http._resolve(host, far_deadline())]
+
+
+def test_uses_system_dns_when_no_servers_configured(
+    tiers: DnsTiers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(safe_http.settings, "scanner_dns_servers", [])
-    created = fake_resolver(monkeypatch, {"A": [PUBLIC_IP], "AAAA": []})
-    safe_http._resolve("example.com")
-    assert created[0].configure is True
-    assert created[0].nameservers == ["system-dns"]
+    tiers.udp = dns_ok(PUBLIC_IP)
+    resolved()
+    assert tiers.resolvers[0].configure is True
+    assert tiers.resolvers[0].nameservers == ["system-dns"]
 
 
-def test_resolve_uses_configured_dns_servers(monkeypatch: pytest.MonkeyPatch) -> None:
-    servers = [ipaddress.ip_address("1.1.1.1"), ipaddress.ip_address("8.8.8.8")]
-    monkeypatch.setattr(safe_http.settings, "scanner_dns_servers", servers)
-    created = fake_resolver(monkeypatch, {"A": [PUBLIC_IP], "AAAA": []})
-    safe_http._resolve("example.com")
-    assert created[0].configure is False
-    assert created[0].nameservers == ["1.1.1.1", "8.8.8.8"]
+def test_uses_configured_dns_servers(tiers: DnsTiers) -> None:
+    tiers.udp = dns_ok(PUBLIC_IP)
+    resolved()
+    assert tiers.resolvers[0].configure is False
+    assert tiers.resolvers[0].nameservers == ["1.1.1.1", "8.8.8.8"]
+
+
+def test_tcp_tier_uses_same_servers_as_udp(tiers: DnsTiers) -> None:
+    tiers.tcp = dns_ok(PUBLIC_IP)
+    resolved()
+    assert [resolver.nameservers for resolver in tiers.resolvers] == [
+        ["1.1.1.1", "8.8.8.8"],
+        ["1.1.1.1", "8.8.8.8"],
+    ]
+
+
+def test_chain_order_when_everything_fails(tiers: DnsTiers) -> None:
+    with pytest.raises(RequestFailedError):
+        resolved()
+    assert tiers.log == FULL_CHAIN
+
+
+def test_udp_answer_ends_chain(tiers: DnsTiers) -> None:
+    tiers.udp = dns_ok(PUBLIC_IP)
+    assert resolved() == [PUBLIC_IP]
+    assert tiers.log == ["udp"]
+
+
+def test_falls_back_to_tcp(tiers: DnsTiers) -> None:
+    tiers.tcp = dns_ok(PUBLIC_IP)
+    assert resolved() == [PUBLIC_IP]
+    assert tiers.log == ["udp", "tcp"]
+
+
+def test_falls_back_to_cloudflare_doh(tiers: DnsTiers) -> None:
+    tiers.doh["1.1.1.1"] = doh_json(a=(PUBLIC_IP,), aaaa=(PUBLIC_IP6,))
+    assert resolved() == [PUBLIC_IP, PUBLIC_IP6]
+    assert tiers.log == ["udp", "tcp", "doh:1.1.1.1"]
+
+
+def test_falls_back_to_google_doh(tiers: DnsTiers) -> None:
+    tiers.doh["8.8.8.8"] = doh_json(a=(PUBLIC_IP,))
+    assert resolved() == [PUBLIC_IP]
+    assert tiers.log == ["udp", "tcp", "doh:1.1.1.1", "doh:8.8.8.8"]
+
+
+def test_falls_back_to_system_resolver(tiers: DnsTiers) -> None:
+    tiers.system = [PUBLIC_IP6, PUBLIC_IP, PUBLIC_IP]
+    assert resolved() == [PUBLIC_IP, PUBLIC_IP6]  # IPv4 first, duplicates removed
+    assert tiers.log == FULL_CHAIN
+
+
+def test_system_resolver_timeout_is_a_failure(
+    tiers: DnsTiers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(safe_http.settings, "scanner_dns_timeout_seconds", 0.02)
+
+    def hang(host: str, port: None, **kwargs: Any) -> list[Any]:
+        time.sleep(0.2)
+        return [(0, 1, 6, "", (PUBLIC_IP, 0))]
+
+    monkeypatch.setattr(safe_http.socket, "getaddrinfo", hang)
+    with pytest.raises(RequestFailedError):
+        resolved()
+
+
+def test_servfail_moves_to_next_tier(tiers: DnsTiers) -> None:
+    tiers.udp = {"A": dns.resolver.NoNameservers(), "AAAA": dns.resolver.NoNameservers()}
+    tiers.tcp = dns_ok(PUBLIC_IP)
+    assert resolved() == [PUBLIC_IP]
+
+
+@pytest.mark.parametrize("error", [dns.resolver.NXDOMAIN, dns.resolver.NoAnswer])
+def test_definite_no_records_ends_chain(tiers: DnsTiers, error: type[Exception]) -> None:
+    tiers.udp = {"A": error(), "AAAA": error()}
+    tiers.tcp = dns_ok(PUBLIC_IP)
+    assert resolved() == []
+    assert tiers.log == ["udp"]
+
+
+def test_doh_nxdomain_ends_chain(tiers: DnsTiers) -> None:
+    tiers.doh["1.1.1.1"] = doh_json(status=3)
+    tiers.doh["8.8.8.8"] = doh_json(a=(PUBLIC_IP,))
+    assert resolved() == []
+    assert tiers.log[-1] == "doh:1.1.1.1"
+
+
+def test_partial_answer_is_not_merged_across_tiers(tiers: DnsTiers) -> None:
+    """A from UDP plus a failed AAAA must not count, or the AAAA could hide a private IP."""
+    tiers.udp = {"A": ["8.8.4.4"], "AAAA": dns.exception.Timeout()}
+    tiers.tcp = dns_ok(PUBLIC_IP)
+    assert resolved() == [PUBLIC_IP]
+
+
+def test_private_aaaa_hidden_by_udp_failure_is_caught(tiers: DnsTiers) -> None:
+    tiers.udp = {"A": [PUBLIC_IP], "AAAA": dns.exception.Timeout()}
+    tiers.tcp = {"A": [PUBLIC_IP], "AAAA": ["fd00::1"]}
+    with pytest.raises(BlockedTargetError):
+        safe_http._validated_ip("example.com", far_deadline())
+
+
+@pytest.mark.parametrize("private", ["127.0.0.1", "169.254.169.254", "10.0.0.5", "::1"])
+@pytest.mark.parametrize("tier", FULL_CHAIN)
+def test_private_answer_from_any_tier_is_blocked(tiers: DnsTiers, tier: str, private: str) -> None:
+    """A private answer must block, not trigger a search for a resolver that says otherwise."""
+    if tier == "udp":
+        tiers.udp = dns_ok(private)
+    elif tier == "tcp":
+        tiers.tcp = dns_ok(private)
+    elif tier == "system":
+        tiers.system = [private]
+    else:
+        tiers.doh[tier.removeprefix("doh:")] = doh_json(a=(private,))
+
+    with pytest.raises(BlockedTargetError):
+        safe_http._validated_ip("example.com", far_deadline())
+    assert tiers.log[-1] == tier
+
+
+def test_fallback_answer_is_pinned_for_the_real_request(
+    tiers: DnsTiers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site_requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "1.1.1.1":
+            return doh_json(a=(PUBLIC_IP,))(request)
+        site_requests.append(request)
+        return httpx.Response(200, content=b"ok")
+
+    monkeypatch.setattr(safe_http, "_make_transport", lambda: httpx.MockTransport(handle))
+    assert safe_get("https://example.com/").status_code == 200
+    assert site_requests[0].url.host == PUBLIC_IP
+    assert site_requests[0].headers["host"] == "example.com"
+
+
+def test_doh_request_shape(tiers: DnsTiers) -> None:
+    tiers.doh["1.1.1.1"] = doh_json(a=(PUBLIC_IP,))
+    resolved()
+    first, second = tiers.doh_requests
+    assert first.url.host == "1.1.1.1"  # an IP literal, so no DNS is needed to reach it
+    assert first.url.path == "/dns-query"
+    assert first.url.params["name"] == "example.com"
+    assert [first.url.params["type"], second.url.params["type"]] == ["A", "AAAA"]
+    assert first.headers["accept"] == "application/dns-json"
+    assert first.extensions["timeout"]["read"] <= 5.0
+
+
+def test_google_doh_uses_ip_literal(tiers: DnsTiers) -> None:
+    tiers.doh["8.8.8.8"] = doh_json(a=(PUBLIC_IP,))
+    resolved()
+    assert tiers.doh_requests[-1].url.host == "8.8.8.8"
+    assert tiers.doh_requests[-1].url.path == "/resolve"
+
+
+def test_doh_ignores_cname_records(tiers: DnsTiers) -> None:
+    records = [
+        {"name": "example.com", "type": 5, "data": "cdn.example.net."},
+        {"name": "cdn.example.net", "type": 1, "data": PUBLIC_IP},
+    ]
+    tiers.doh["1.1.1.1"] = httpx.Response(200, json={"Status": 0, "Answer": records})
+    assert resolved() == [PUBLIC_IP]
+
+
+def test_doh_without_answer_section_means_no_records(tiers: DnsTiers) -> None:
+    tiers.doh["1.1.1.1"] = httpx.Response(200, json={"Status": 0})
+    assert resolved() == []
+
+
+@pytest.mark.parametrize(
+    "bad_response",
+    [
+        httpx.Response(500),
+        # A valid-looking body must not be trusted on an error status.
+        httpx.Response(500, json={"Status": 0, "Answer": [{"type": 1, "data": "9.9.9.9"}]}),
+        httpx.Response(200, content=b"not json"),
+        httpx.Response(200, json=[1, 2]),
+        httpx.Response(200, json="text"),
+        httpx.Response(200, json={"Answer": []}),
+        httpx.Response(200, json={"Status": 2}),
+        httpx.Response(200, json={"Status": 0, "Answer": [{"type": 1, "data": "not-an-ip"}]}),
+        httpx.Response(200, json={"Status": 0, "Answer": [{"data": PUBLIC_IP}]}),
+        httpx.Response(200, content=b"x" * (safe_http.MAX_RESPONSE_BYTES + 1)),
+        # Still parses as JSON after being cut off, so only the truncation check rejects it.
+        httpx.Response(200, content=b'{"Status":0}' + b" " * safe_http.MAX_RESPONSE_BYTES),
+    ],
+)
+def test_bad_doh_response_moves_to_next_tier(tiers: DnsTiers, bad_response: httpx.Response) -> None:
+    tiers.doh["1.1.1.1"] = bad_response
+    tiers.doh["8.8.8.8"] = doh_json(a=(PUBLIC_IP,))
+    assert resolved() == [PUBLIC_IP]
+    assert tiers.log[-1] == "doh:8.8.8.8"
+
+
+def test_dns_timeout_defaults_to_five_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SCANNER_DNS_TIMEOUT_SECONDS", raising=False)
+    assert Settings(_env_file=None).scanner_dns_timeout_seconds == 5.0
+
+
+def test_dns_timeout_is_configurable() -> None:
+    parsed = Settings(_env_file=None, scanner_dns_timeout_seconds="2.5")
+    assert parsed.scanner_dns_timeout_seconds == 2.5
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "31", "soon"])
+def test_invalid_dns_timeout_is_rejected(value: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, scanner_dns_timeout_seconds=value)
+
+
+def test_dns_timeout_setting_reaches_resolver(
+    tiers: DnsTiers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(safe_http.settings, "scanner_dns_timeout_seconds", 2.0)
+    tiers.udp = dns_ok(PUBLIC_IP)
+    resolved()
+    assert tiers.resolvers[0].lifetime == pytest.approx(2.0, abs=0.5)
+
+
+def test_tier_budget_is_limited_by_request_deadline(tiers: DnsTiers) -> None:
+    tiers.udp = dns_ok(PUBLIC_IP)
+    safe_http._resolve("example.com", time.monotonic() + 1.0)
+    assert tiers.resolvers[0].lifetime <= 1.0
+
+
+def test_expired_deadline_stops_chain(tiers: DnsTiers) -> None:
+    tiers.udp = dns_ok(PUBLIC_IP)
+    with pytest.raises(RequestFailedError):
+        safe_http._resolve("example.com", time.monotonic() - 1)
+    assert tiers.log == []
 
 
 def test_dns_servers_default_to_empty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -479,21 +775,22 @@ def test_invalid_dns_servers_are_rejected(value: str) -> None:
         Settings(_env_file=None, scanner_dns_servers=value)
 
 
-def test_resolve_returns_ipv4_before_ipv6(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_resolver(monkeypatch, {"A": [PUBLIC_IP], "AAAA": [PUBLIC_IP6]})
-    assert [str(ip) for ip in safe_http._resolve("example.com")] == [PUBLIC_IP, PUBLIC_IP6]
+def test_resolve_returns_ipv4_before_ipv6(tiers: DnsTiers) -> None:
+    tiers.udp = {"A": [PUBLIC_IP], "AAAA": [PUBLIC_IP6]}
+    assert resolved() == [PUBLIC_IP, PUBLIC_IP6]
 
 
-def test_resolve_tolerates_missing_record_type(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_resolver(monkeypatch, {"A": [PUBLIC_IP], "AAAA": dns.resolver.NoAnswer()})
-    assert [str(ip) for ip in safe_http._resolve("example.com")] == [PUBLIC_IP]
+def test_resolve_tolerates_missing_record_type(tiers: DnsTiers) -> None:
+    tiers.udp = dns_ok(PUBLIC_IP)
+    assert resolved() == [PUBLIC_IP]
 
 
-def test_resolve_fails_closed_on_partial_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_fails_closed_when_every_tier_is_partial(tiers: DnsTiers) -> None:
     """A timed-out AAAA lookup could be hiding a private record."""
-    fake_resolver(monkeypatch, {"A": [PUBLIC_IP], "AAAA": dns.exception.Timeout()})
+    tiers.udp = {"A": [PUBLIC_IP], "AAAA": dns.exception.Timeout()}
+    tiers.tcp = {"A": [PUBLIC_IP], "AAAA": dns.exception.Timeout()}
     with pytest.raises(RequestFailedError):
-        safe_http._resolve("example.com")
+        resolved()
 
 
 def test_only_safe_http_imports_httpx() -> None:

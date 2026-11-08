@@ -38,7 +38,7 @@ backend/.venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt
 npm --prefix frontend install
 ```
 
-If scan DNS lookups time out, set `SCANNER_DNS_SERVERS=1.1.1.1,8.8.8.8` in `.env`.
+Scan DNS lookups fall back automatically from UDP to TCP, DNS-over-HTTPS and then the operating system. If your network blocks UDP DNS, set `SCANNER_DNS_SERVERS=1.1.1.1,8.8.8.8` and a lower `SCANNER_DNS_TIMEOUT_SECONDS` in `.env` to reach the working fallback sooner.
 
 ## Run
 

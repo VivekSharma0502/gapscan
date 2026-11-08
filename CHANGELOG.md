@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-08: DNS fallback chain for networks that block UDP
+
+**Added**
+- `safe_http` now resolves through a chain: configured (or system) DNS servers over UDP, the same servers over TCP, DNS-over-HTTPS (Cloudflare, then Google), then the operating system. The development network blocks UDP port 53, so every lookup was failing.
+- `SCANNER_DNS_TIMEOUT_SECONDS` (default 5), applied to each resolver and bounded by the request's total deadline.
+
+**Security**
+- Only failures move to the next resolver, and answers are never merged across resolvers, so a partial answer cannot hide a private record.
+- Addresses from every resolver still go through the same IP checks, and a private answer blocks the request.
+- DoH endpoints are hardcoded IP literals with verified certificates, so they do not depend on the DNS that just failed. Hostnames being scanned are only sent to them when the earlier resolvers fail.
+
 ## 2026-11-08: Configurable DNS servers for scans
 
 **Added**

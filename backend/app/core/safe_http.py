@@ -8,9 +8,14 @@ that was checked is the address that gets used.
 """
 
 import ipaddress
+import json
 import re
+import socket
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any
 
 import dns.exception
 import dns.resolver
@@ -27,7 +32,6 @@ DEFAULT_PORTS = {"http": 80, "https": 443}
 MAX_REDIRECTS = 5
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
-DNS_TIMEOUT_SECONDS = 3.0
 CONNECT_TIMEOUT_SECONDS = 5.0
 READ_TIMEOUT_SECONDS = 10.0
 WRITE_TIMEOUT_SECONDS = 5.0
@@ -36,6 +40,13 @@ WRITE_TIMEOUT_SECONDS = 5.0
 TOTAL_DEADLINE_SECONDS = 20.0
 
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+# DNS-over-HTTPS fallbacks. These are IP literals on purpose: looking up a DoH server's
+# name would need the DNS that just failed. Their certificates cover these IPs.
+_DOH_ENDPOINTS = ("https://1.1.1.1/dns-query", "https://8.8.8.8/resolve")
+_DOH_RECORD_TYPES = {"A": 1, "AAAA": 28}
+_DOH_STATUS_OK = 0
+_DOH_STATUS_NXDOMAIN = 3
 
 # Names that only ever mean something on a private network.
 _BLOCKED_HOSTNAMES = {"localhost"}
@@ -76,6 +87,10 @@ class TooManyRedirectsError(SafeHttpError):
 
 class RequestFailedError(SafeHttpError):
     """DNS, network, TLS or deadline failure."""
+
+
+class _DnsTierFailed(Exception):
+    """One resolver could not give a complete answer, so the next one should be tried."""
 
 
 @dataclass(frozen=True)
@@ -124,28 +139,121 @@ def _parse_url(url: str | httpx.URL) -> httpx.URL:
     return parsed
 
 
-def _resolve(host: str) -> list[IPAddress]:
-    """Return every A and AAAA record for host, IPv4 first."""
+def _query_dns_servers(host: str, servers: list[str], tcp: bool, budget: float) -> list[IPAddress]:
+    """Ask the given servers, or the system's configured ones if servers is empty."""
+    tier_deadline = time.monotonic() + budget
     addresses: list[IPAddress] = []
     try:
-        servers = [str(server) for server in settings.scanner_dns_servers]
         resolver = dns.resolver.Resolver(configure=not servers)
         if servers:
             resolver.nameservers = servers
-        resolver.lifetime = DNS_TIMEOUT_SECONDS
         for record_type in ("A", "AAAA"):
+            resolver.lifetime = tier_deadline - time.monotonic()
             try:
-                answer = resolver.resolve(host, record_type)
+                answer = resolver.resolve(host, record_type, tcp=tcp)
             except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
                 continue
             addresses.extend(ipaddress.ip_address(record.address) for record in answer)
     except dns.exception.DNSException as exc:
-        # Security: fail closed. A partial answer could hide a private record.
-        raise RequestFailedError("DNS lookup failed") from exc
+        raise _DnsTierFailed from exc
     return addresses
 
 
-def _validated_ip(host: str) -> IPAddress:
+def _parse_doh_answer(payload: Any, type_code: int) -> list[IPAddress]:
+    status = payload["Status"]
+    if status == _DOH_STATUS_NXDOMAIN:
+        return []
+    if status != _DOH_STATUS_OK:
+        raise _DnsTierFailed
+    # Answers can include CNAME records, which are not addresses.
+    return [
+        ipaddress.ip_address(record["data"])
+        for record in payload.get("Answer", [])
+        if record["type"] == type_code
+    ]
+
+
+def _query_doh(endpoint: str, host: str, budget: float) -> list[IPAddress]:
+    # Security: a hardcoded endpoint, with the same TLS checks and size cap as scan traffic.
+    tier_deadline = time.monotonic() + budget
+    headers = {"Accept": "application/dns-json", "User-Agent": settings.scanner_user_agent}
+    addresses: list[IPAddress] = []
+    try:
+        with httpx.Client(
+            transport=_make_transport(), trust_env=False, follow_redirects=False
+        ) as client:
+            for record_type, type_code in _DOH_RECORD_TYPES.items():
+                with client.stream(
+                    "GET",
+                    endpoint,
+                    params={"name": host, "type": record_type},
+                    headers=headers,
+                    timeout=_timeouts(tier_deadline),
+                ) as response:
+                    if response.status_code != httpx.codes.OK:
+                        raise _DnsTierFailed
+                    body, truncated = _read_capped(response, tier_deadline)
+                if truncated:
+                    raise _DnsTierFailed
+                addresses.extend(_parse_doh_answer(json.loads(body), type_code))
+    except (
+        httpx.HTTPError,
+        RequestFailedError,
+        ValueError,  # invalid JSON or IP address
+        KeyError,  # missing field
+        TypeError,  # JSON of the wrong shape
+        AttributeError,
+    ) as exc:
+        raise _DnsTierFailed from exc
+    return addresses
+
+
+def _query_system(host: str, budget: float) -> list[IPAddress]:
+    # getaddrinfo has no timeout of its own, so it runs in a thread we can stop waiting for.
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(socket.getaddrinfo, host, None, type=socket.SOCK_STREAM)
+        results = future.result(timeout=budget)
+    except (OSError, UnicodeError) as exc:  # TimeoutError and gaierror are OSErrors
+        raise _DnsTierFailed from exc
+    finally:
+        executor.shutdown(wait=False)
+    unique = dict.fromkeys(ipaddress.ip_address(result[4][0]) for result in results)
+    return sorted(unique, key=lambda address: address.version)
+
+
+def _resolve(host: str, deadline: float) -> list[IPAddress]:
+    """Return every A and AAAA record for host, IPv4 first, using the first working resolver.
+
+    Some networks block plain DNS, so this falls back from UDP to TCP to DNS-over-HTTPS
+    to the operating system. Only failures move on to the next resolver. A definite answer,
+    including "no such host", ends the chain. Each resolver gets its own timeout.
+    """
+    servers = [str(server) for server in settings.scanner_dns_servers]
+    tiers: list[Callable[[float], list[IPAddress]]] = [
+        lambda budget: _query_dns_servers(host, servers, False, budget),
+        lambda budget: _query_dns_servers(host, servers, True, budget),
+        lambda budget: _query_doh(_DOH_ENDPOINTS[0], host, budget),
+        lambda budget: _query_doh(_DOH_ENDPOINTS[1], host, budget),
+        lambda budget: _query_system(host, budget),
+    ]
+
+    for tier in tiers:
+        budget = min(settings.scanner_dns_timeout_seconds, deadline - time.monotonic())
+        if budget <= 0:
+            break
+        try:
+            # Security: answers are never merged across resolvers. A resolver that returned
+            # only some records could otherwise hide a private address. Whatever comes back
+            # still goes through the IP checks in _validated_ip, and a private answer
+            # blocks the request instead of moving on to ask another resolver.
+            return tier(budget)
+        except _DnsTierFailed:
+            continue
+    raise RequestFailedError("DNS lookup failed")
+
+
+def _validated_ip(host: str, deadline: float) -> IPAddress:
     """Return the IP to connect to for host, or raise if the host is not allowed."""
     if not host:
         raise BlockedTargetError("missing host")
@@ -167,7 +275,7 @@ def _validated_ip(host: str) -> IPAddress:
     if name in _BLOCKED_HOSTNAMES or name.endswith(_BLOCKED_SUFFIXES):
         raise BlockedTargetError("host not allowed")
 
-    addresses = _resolve(name)
+    addresses = _resolve(name, deadline)
     if not addresses:
         raise RequestFailedError("host did not resolve")
     # Security: refuse if any record is private. Picking only the public ones would let
@@ -211,7 +319,7 @@ def _read_capped(response: httpx.Response, deadline: float) -> tuple[bytes, bool
 
 def _send_pinned(method: str, url: httpx.URL, deadline: float) -> _Hop:
     host = url.raw_host.decode("ascii")
-    ip = _validated_ip(host)
+    ip = _validated_ip(host, deadline)
     timeouts = _timeouts(deadline)
 
     # Security: connect to the IP we just validated, not the hostname. If the HTTP
