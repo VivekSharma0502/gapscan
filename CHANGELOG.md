@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1d: live scan progress
+
+**Added**
+- `/scan/[id]` polls the scan once a second and shows each step in a terminal-style log with a progress bar. The address can be refreshed or shared at any point.
+- A failed scan offers a fresh attempt, and an unknown id gets a clear message.
+
+**Security**
+- The log shows plain `done` and `running` with no ticks or color, and uses neutral step names, because an id like `tls.cert_expired` next to `done` would read as a finding.
+- Scan pages ask search engines not to index them, since a report lists a site's weaknesses.
+
 ## 2026-11-08: Phase 1, step 1d: landing page
 
 **Added**
