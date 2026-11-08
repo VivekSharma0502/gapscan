@@ -6,13 +6,16 @@ import re
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import dns.exception
 import dns.resolver
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.core import safe_http
+from app.core.config import Settings
 from app.core.safe_http import (
     BlockedTargetError,
     RequestFailedError,
@@ -414,9 +417,16 @@ class FakeRecord:
 
 def fake_resolver(
     monkeypatch: pytest.MonkeyPatch, answers: dict[str, list[str] | Exception]
-) -> None:
+) -> list[Any]:
+    created: list[Any] = []
+
     class Resolver:
         lifetime = 0.0
+
+        def __init__(self, configure: bool = True) -> None:
+            self.configure = configure
+            self.nameservers = ["system-dns"] if configure else []
+            created.append(self)
 
         def resolve(self, host: str, record_type: str) -> list[FakeRecord]:
             answer = answers[record_type]
@@ -425,6 +435,48 @@ def fake_resolver(
             return [FakeRecord(address) for address in answer]
 
     monkeypatch.setattr(dns.resolver, "Resolver", Resolver)
+    return created
+
+
+def test_resolve_uses_system_dns_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(safe_http.settings, "scanner_dns_servers", [])
+    created = fake_resolver(monkeypatch, {"A": [PUBLIC_IP], "AAAA": []})
+    safe_http._resolve("example.com")
+    assert created[0].configure is True
+    assert created[0].nameservers == ["system-dns"]
+
+
+def test_resolve_uses_configured_dns_servers(monkeypatch: pytest.MonkeyPatch) -> None:
+    servers = [ipaddress.ip_address("1.1.1.1"), ipaddress.ip_address("8.8.8.8")]
+    monkeypatch.setattr(safe_http.settings, "scanner_dns_servers", servers)
+    created = fake_resolver(monkeypatch, {"A": [PUBLIC_IP], "AAAA": []})
+    safe_http._resolve("example.com")
+    assert created[0].configure is False
+    assert created[0].nameservers == ["1.1.1.1", "8.8.8.8"]
+
+
+def test_dns_servers_default_to_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SCANNER_DNS_SERVERS", raising=False)
+    assert Settings(_env_file=None).scanner_dns_servers == []
+
+
+@pytest.mark.parametrize("value", ["", " , "])
+def test_blank_dns_servers_mean_system_dns(value: str) -> None:
+    assert Settings(_env_file=None, scanner_dns_servers=value).scanner_dns_servers == []
+
+
+def test_dns_servers_are_parsed_from_comma_list() -> None:
+    parsed = Settings(_env_file=None, scanner_dns_servers="1.1.1.1, 2606:4700:4700::1111")
+    assert [str(server) for server in parsed.scanner_dns_servers] == [
+        "1.1.1.1",
+        "2606:4700:4700::1111",
+    ]
+
+
+@pytest.mark.parametrize("value", ["not-an-ip", "1.1.1.1,dns.google", "1.1.1"])
+def test_invalid_dns_servers_are_rejected(value: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, scanner_dns_servers=value)
 
 
 def test_resolve_returns_ipv4_before_ipv6(monkeypatch: pytest.MonkeyPatch) -> None:

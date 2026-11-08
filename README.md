@@ -38,6 +38,8 @@ backend/.venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt
 npm --prefix frontend install
 ```
 
+If scan DNS lookups time out, set `SCANNER_DNS_SERVERS=1.1.1.1,8.8.8.8` in `.env`.
+
 ## Run
 
 Use two terminals.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-08: Configurable DNS servers for scans
+
+**Added**
+- Optional `SCANNER_DNS_SERVERS` setting (comma-separated IPs, validated at startup). Empty keeps the system's DNS. Windows machines can list dead DNS servers from disconnected adapters, which used up the lookup timeout before a working server was tried, and public resolvers also keep scans away from internal DNS views.
+
 ## 2026-11-08: Phase 1, step 1a: SSRF-safe HTTP client
 
 **Added**

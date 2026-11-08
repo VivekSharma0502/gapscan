@@ -128,7 +128,10 @@ def _resolve(host: str) -> list[IPAddress]:
     """Return every A and AAAA record for host, IPv4 first."""
     addresses: list[IPAddress] = []
     try:
-        resolver = dns.resolver.Resolver()
+        servers = [str(server) for server in settings.scanner_dns_servers]
+        resolver = dns.resolver.Resolver(configure=not servers)
+        if servers:
+            resolver.nameservers = servers
         resolver.lifetime = DNS_TIMEOUT_SECONDS
         for record_type in ("A", "AAAA"):
             try:
