@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleUser, LogOut } from "lucide-react";
+import { CircleUser, Globe, LogOut } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -55,6 +55,10 @@ export function UserMenu() {
           </DropdownMenuLabel>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
+        <DropdownMenuItem render={<Link href="/domains" />}>
+          <Globe aria-hidden />
+          My domains
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => void signOut()}>
           <LogOut aria-hidden />
           Sign out

@@ -28,11 +28,41 @@ function hasOnlyNotes(scan: Scan): boolean {
 }
 
 function findingsSummary(scan: Scan): string {
-  if (scan.total_findings === 0) return "Passive checks found no issues.";
+  const checks = scan.mode === "full" ? "The full scan" : "Passive checks";
+  if (scan.total_findings === 0) return `${checks} found no issues.`;
   if (hasOnlyNotes(scan)) {
     return `No issues found · ${counted(scan.total_findings, "note")}`;
   }
-  return `Passive checks found ${counted(scan.total_findings, "issue")}.`;
+  return `${checks} found ${counted(scan.total_findings, "issue")}.`;
+}
+
+// A check that couldn't run isn't a pass, so a full scan says which reasons applied.
+function ActiveChecksNotice({ scan }: { scan: Scan }) {
+  const reasons = [
+    ...new Set(
+      scan.skipped
+        .filter(
+          (item) =>
+            item.check_id.startsWith("exposure.") && !item.not_applicable,
+        )
+        .map((item) => item.reason),
+    ),
+  ];
+  if (scan.mode !== "full" || reasons.length === 0) return null;
+
+  return (
+    <section className="flex flex-col gap-2 rounded-xl bg-card p-6 ring-1 ring-foreground/10">
+      <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+        <TriangleAlert className="size-4 text-muted-foreground" aria-hidden />
+        Some file exposure checks didn&apos;t finish
+      </h2>
+      {reasons.map((reason) => (
+        <p key={reason} className="text-sm text-pretty text-muted-foreground">
+          {reason}
+        </p>
+      ))}
+    </section>
+  );
 }
 
 function ScoreSummary({ scan }: { scan: Scan }) {
@@ -194,6 +224,7 @@ export function ScanResults({ scan }: { scan: Scan }) {
   return (
     <div className="flex animate-in flex-col gap-10 duration-300 fade-in">
       <ScoreSummary scan={scan} />
+      <ActiveChecksNotice scan={scan} />
 
       {shown > 0 && (
         <section

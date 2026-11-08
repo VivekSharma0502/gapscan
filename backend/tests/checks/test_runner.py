@@ -70,6 +70,12 @@ EXPECTED_CHECKS = {
     "dns.caa_missing",
     "dns.shared_platform_domain",
     "cms.wordpress_version",
+    "exposure.env_file",
+    "exposure.git_directory",
+    "exposure.ds_store",
+    "exposure.backup_file",
+    "exposure.source_maps",
+    "exposure.directory_listing",
 }
 
 

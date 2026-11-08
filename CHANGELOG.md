@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-11-08: Phase 2, step 2b: verified domains and active checks
+
+**Added**
+- A `/domains` page, linked as "My domains" in the user menu: add up to 3 domains, verify them, and run full scans. Run `alembic upgrade head`, and restart the worker so it picks up the new task.
+- Two ways to prove ownership, each with its own token: a DNS TXT record at `_scankit-verify.<hostname>`, or a file at `/.well-known/scankit-verify.txt` for sites on shared platforms. A prefixed name is used because a hostname with a CNAME can't also have a TXT record.
+- Verification failures say what went wrong for each method: TXT not found yet, wrong token, file missing, a web page returned instead of the file, redirected elsewhere, or site unreachable.
+- Six active checks, for verified domains only: exposed `.env` files, `.git`, `.DS_Store`, backup files, public source maps and directory listings. Each one matches the file's content, so single-page apps that return their HTML for every path don't trigger false alarms.
+- `POST /api/domains/{id}/scan` runs a passive and active scan. Only one can run per domain at a time, with at most 10 per domain per hour.
+
+**Security**
+- The worker proves ownership again before every full scan, because a domain can change hands after it was verified. If the proof is definitely gone the domain becomes unverified and only passive checks run. A temporary failure skips the active checks but keeps the verification.
+- `safe_http` can now refuse a redirect to another host before sending it. Active probes need this to stay on the verified site, and the verification file needs it so another server can't supply the token.
+- The verification file must contain only the token, so a site that shows visitors' text on every page can't be used to verify it.
+- Full scan reports return 404 to anyone but their owner. Other scans still show a teaser, but even the top findings of a full scan could name an exposed file and its keys.
+- Evidence is built only from fixed paths and key names, so the contents of an exposed file are never stored.
+
+**Changed**
+- A probe that got no reliable answer leaves its check skipped and the score labelled partial. Unanswered is not the same as clear.
+- Signing out now clears all cached account data from the page, including domains.
+
 ## 2026-11-08: Phase 2, step 2a: Supabase Auth
 
 **Added**

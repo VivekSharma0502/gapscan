@@ -19,6 +19,7 @@ from app.core import safe_http
 from app.core.config import Settings
 from app.core.safe_http import (
     BlockedTargetError,
+    OffHostRedirectError,
     RequestFailedError,
     TooManyRedirectsError,
     is_public_ip,
@@ -292,6 +293,55 @@ def test_redirects_are_followed_and_recorded(net: FakeNet, status: int) -> None:
     assert net.requests[1].url.host == "1.1.1.1"
     assert net.requests[1].headers["host"] == "other.com"
     assert net.requests[1].extensions["sni_hostname"] == "other.com"
+
+
+ONLY_EXAMPLE = frozenset({"example.com", "www.example.com"})
+
+
+def test_off_host_redirect_is_refused_before_it_is_sent(net: FakeNet) -> None:
+    # Security: active probes may only reach verified domains, so the request must not leave.
+    net.routes["example.com/.env"] = redirect("https://other.com/.env")
+
+    with pytest.raises(OffHostRedirectError):
+        safe_get("https://example.com/.env", allowed_hosts=ONLY_EXAMPLE)
+
+    assert [request.headers["host"] for request in net.requests] == ["example.com"]
+    assert "other.com" not in net.lookups
+
+
+def test_allowed_hosts_permits_listed_hosts_and_same_host_paths(net: FakeNet) -> None:
+    net.dns["www.example.com"] = [PUBLIC_IP]
+    net.routes["example.com/a"] = redirect("/b")
+    net.routes["example.com/b"] = redirect("https://www.example.com/c")
+
+    result = safe_get("https://example.com/a", allowed_hosts=ONLY_EXAMPLE)
+
+    assert result.url == "https://www.example.com/c"
+
+
+def test_allowed_hosts_ignores_a_trailing_dot_and_case(net: FakeNet) -> None:
+    net.dns["example.com."] = [PUBLIC_IP]
+    net.routes["example.com/a"] = redirect("https://EXAMPLE.com./b")
+
+    assert safe_get("https://example.com/a", allowed_hosts=ONLY_EXAMPLE).status_code == 200
+
+
+def test_max_bytes_truncates_a_smaller_read(net: FakeNet) -> None:
+    net.routes["example.com/big"] = httpx.Response(200, content=b"x" * 100)
+
+    result = safe_get("https://example.com/big", max_bytes=10)
+
+    assert (result.content, result.truncated) == (b"x" * 10, True)
+
+
+def test_max_bytes_cannot_raise_the_cap(net: FakeNet) -> None:
+    net.routes["example.com/big"] = httpx.Response(
+        200, content=b"x" * (safe_http.MAX_RESPONSE_BYTES + 1)
+    )
+
+    result = safe_get("https://example.com/big", max_bytes=safe_http.MAX_RESPONSE_BYTES * 2)
+
+    assert len(result.content) == safe_http.MAX_RESPONSE_BYTES
 
 
 def test_relative_redirect_is_resolved(net: FakeNet) -> None:

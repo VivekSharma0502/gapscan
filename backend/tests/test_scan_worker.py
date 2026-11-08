@@ -1,20 +1,33 @@
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import Engine
 from sqlmodel import Session, select
 
-from app.checks import runner
+from app.checks import active_collector, runner
 from app.checks.base import Category, Finding, ScanContext, Severity
 from app.checks.catalog import CATALOG
 from app.checks.collector import COLLECT_STEPS
+from app.checks.ownership import (
+    FailureCode,
+    MethodFailure,
+    OwnershipResult,
+    VerificationMethod,
+)
 from app.checks.registry import CheckSpec
 from app.checks.runner import ScanStatus, selected_checks
-from app.models.scan import FindingRecord, Scan, ScanJobStatus, ScanMode, TargetType
+from app.models.domain import Domain
+from app.models.profile import Profile
+from app.models.scan import FindingRecord, Scan, ScanJobStatus, ScanMode, TargetType, utc_now
 from app.workers import celery_app as celery_module
 from app.workers import tasks
-from app.workers.tasks import initial_quick_progress, run_quick_scan
+from app.workers.tasks import (
+    initial_full_progress,
+    initial_quick_progress,
+    run_full_scan,
+    run_quick_scan,
+)
 from tests.checks.helpers import response
 
 
@@ -58,6 +71,227 @@ def collected(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def findings_of(engine: Engine, scan_id: UUID) -> list[FindingRecord]:
     with Session(engine) as session:
         return list(session.exec(select(FindingRecord).where(FindingRecord.scan_id == scan_id)))
+
+
+# Full scans: active checks run only after ownership is confirmed
+
+
+SECRET_VALUE = "sk_live_super_secret"  # noqa: S105
+
+
+class ProbeNet:
+    """Stands in for the probing client, and records every path requested."""
+
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    def __call__(self, url: str, **_kwargs: Any) -> Any:
+        self.urls.append(url)
+        if url.endswith("/.env"):
+            return response(body=f"API_KEY={SECRET_VALUE}\n".encode())
+        return response(status=404)
+
+
+@pytest.fixture
+def probe_net(monkeypatch: pytest.MonkeyPatch) -> ProbeNet:
+    fake = ProbeNet()
+    monkeypatch.setattr(active_collector, "safe_get", fake)
+    return fake
+
+
+def add_domain(engine: Engine, owner: UUID, *, verified: bool = True, hostname: str = "") -> UUID:
+    with Session(engine) as session:
+        session.add(Profile(id=owner))
+        domain = Domain(
+            owner_id=owner,
+            hostname=hostname or "example.com",
+            verify_token="tok",  # noqa: S106
+            verified_at=utc_now() if verified else None,
+        )
+        session.add(domain)
+        session.commit()
+        return domain.id
+
+
+def add_full(engine: Engine, owner: UUID, domain_id: UUID | None) -> UUID:
+    return add_scan(
+        engine,
+        owner_id=owner,
+        domain_id=domain_id,
+        mode=ScanMode.FULL,
+        progress_json=initial_full_progress(),
+    )
+
+
+def proof(monkeypatch: pytest.MonkeyPatch, result: OwnershipResult) -> list[str]:
+    calls: list[str] = []
+
+    def prove(hostname: str, _token: str) -> OwnershipResult:
+        calls.append(hostname)
+        return result
+
+    monkeypatch.setattr(tasks, "prove_ownership", prove)
+    return calls
+
+
+GONE = OwnershipResult(
+    None,
+    (
+        MethodFailure(VerificationMethod.DNS, FailureCode.TXT_NOT_FOUND, "no", True),
+        MethodFailure(VerificationMethod.FILE, FailureCode.FILE_MISSING, "no", True),
+    ),
+)
+UNKNOWN = OwnershipResult(
+    None,
+    (
+        MethodFailure(VerificationMethod.DNS, FailureCode.TXT_NOT_FOUND, "no", True),
+        MethodFailure(VerificationMethod.FILE, FailureCode.FILE_UNREACHABLE, "down", False),
+    ),
+)
+PROVEN = OwnershipResult(VerificationMethod.DNS)
+
+
+def active_skips(engine: Engine, scan_id: UUID) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in load(engine, scan_id).skipped_json
+        if item["check_id"].startswith("exposure.")
+    ]
+
+
+@pytest.mark.usefixtures("collected")
+def test_full_scan_probes_and_saves_masked_findings(
+    db_engine: Engine, probe_net: ProbeNet, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = proof(monkeypatch, PROVEN)
+    owner = uuid4()
+    scan_id = add_full(db_engine, owner, add_domain(db_engine, owner))
+
+    run_full_scan(str(scan_id))
+
+    scan = load(db_engine, scan_id)
+    assert scan.status is ScanJobStatus.DONE
+    assert calls == ["example.com"]
+    assert "https://example.com/.env" in probe_net.urls
+    finding = next(
+        item for item in findings_of(db_engine, scan_id) if item.check_id == "exposure.env_file"
+    )
+    assert "API_KEY" in finding.evidence_masked
+    # Security: the value must not survive anywhere in what was saved.
+    saved = " ".join(item.evidence_masked for item in findings_of(db_engine, scan_id))
+    assert SECRET_VALUE not in saved
+    assert SECRET_VALUE not in str(scan.progress_json)
+    assert SECRET_VALUE not in str(scan.skipped_json)
+
+
+@pytest.mark.usefixtures("collected")
+def test_full_scan_progress_reaches_its_total(
+    db_engine: Engine, probe_net: ProbeNet, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proof(monkeypatch, PROVEN)
+    owner = uuid4()
+    scan_id = add_full(db_engine, owner, add_domain(db_engine, owner))
+
+    run_full_scan(str(scan_id))
+
+    progress = load(db_engine, scan_id).progress_json
+    assert progress["completed"] == progress["total"]
+    assert len(progress["steps"]) == progress["total"]
+    assert progress["steps"][0]["name"] == tasks.OWNERSHIP_STEP
+
+
+@pytest.mark.usefixtures("collected")
+def test_proof_gone_means_no_probes_and_unverifies(
+    db_engine: Engine, probe_net: ProbeNet, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proof(monkeypatch, GONE)
+    owner = uuid4()
+    domain_id = add_domain(db_engine, owner)
+    scan_id = add_full(db_engine, owner, domain_id)
+
+    run_full_scan(str(scan_id))
+
+    assert probe_net.urls == []
+    with Session(db_engine) as session:
+        assert session.get_one(Domain, domain_id).verified_at is None
+    skips = active_skips(db_engine, scan_id)
+    assert len(skips) == 6
+    assert "marked unverified" in skips[0]["reason"]
+    assert load(db_engine, scan_id).score_label is not None
+
+
+@pytest.mark.usefixtures("collected")
+def test_temporary_proof_failure_skips_probes_but_stays_verified(
+    db_engine: Engine, probe_net: ProbeNet, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proof(monkeypatch, UNKNOWN)
+    owner = uuid4()
+    domain_id = add_domain(db_engine, owner)
+    scan_id = add_full(db_engine, owner, domain_id)
+
+    run_full_scan(str(scan_id))
+
+    assert probe_net.urls == []
+    with Session(db_engine) as session:
+        assert session.get_one(Domain, domain_id).verified_at is not None
+    assert "re-confirm" in active_skips(db_engine, scan_id)[0]["reason"]
+
+
+@pytest.mark.usefixtures("collected")
+@pytest.mark.parametrize("problem", ["unverified", "other_owner", "wrong_host", "no_domain"])
+def test_worker_refuses_to_probe_without_a_matching_verified_domain(
+    db_engine: Engine, probe_net: ProbeNet, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    # Security: the worker doesn't rely on the API having checked.
+    calls = proof(monkeypatch, PROVEN)
+    owner = uuid4()
+    domain_id: UUID | None = add_domain(
+        db_engine,
+        owner if problem != "other_owner" else uuid4(),
+        verified=problem != "unverified",
+        hostname="other.com" if problem == "wrong_host" else "",
+    )
+    if problem == "other_owner":
+        with Session(db_engine) as session:
+            session.add(Profile(id=owner))
+            session.commit()
+    if problem == "no_domain":
+        domain_id = None
+    scan_id = add_full(db_engine, owner, domain_id)
+
+    run_full_scan(str(scan_id))
+
+    assert probe_net.urls == []
+    assert calls == []
+    assert "isn't verified" in active_skips(db_engine, scan_id)[0]["reason"]
+
+
+@pytest.mark.usefixtures("collected")
+def test_quick_scan_sends_no_probes(db_engine: Engine, probe_net: ProbeNet) -> None:
+    # Security: the hard rule. Quick scans run on domains nobody has verified.
+    scan_id = add_scan(db_engine)
+
+    run_quick_scan(str(scan_id))
+
+    assert probe_net.urls == []
+    assert active_skips(db_engine, scan_id) == []
+
+
+@pytest.mark.usefixtures("collected")
+def test_full_scan_failure_is_recorded(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch, probe_net: ProbeNet
+) -> None:
+    def boom(_hostname: str, _token: str) -> OwnershipResult:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(tasks, "prove_ownership", boom)
+    owner = uuid4()
+    scan_id = add_full(db_engine, owner, add_domain(db_engine, owner))
+
+    run_full_scan(str(scan_id))
+
+    assert load(db_engine, scan_id).status is ScanJobStatus.FAILED
+    assert probe_net.urls == []
 
 
 def test_scan_saves_report_and_findings(db_engine: Engine, collected: list[str]) -> None:

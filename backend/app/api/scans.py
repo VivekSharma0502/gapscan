@@ -4,7 +4,7 @@ import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -118,6 +118,7 @@ class FindingOut(BaseModel):
 class ScanOut(BaseModel):
     id: UUID
     target: str
+    mode: ScanMode
     status: ScanJobStatus
     progress: ScanProgress
     result_status: ScanStatus | None
@@ -134,7 +135,7 @@ class ScanOut(BaseModel):
     teaser: bool
 
 
-def _lock_target(session: Session, hostname: str) -> None:
+def lock_target(session: Session, hostname: str) -> None:
     # Without this, simultaneous requests could all see no recent scan and all start one,
     # getting past both per-target limits. The lock is held until this transaction ends.
     if session.get_bind().dialect.name == "postgresql":
@@ -234,10 +235,10 @@ def _grant_access_to_reused_scan(session: Session, scan: Scan, viewer_id: UUID) 
     _adopt_unowned_scans(session, [scan.id], viewer_id)
 
 
-def _enqueue(session: Session, scan_id: UUID) -> None:
+def enqueue_scan(session: Session, scan_id: UUID, task: Any) -> None:
     try:
         # retry=False: if the broker is down, the visitor gets an error now, not a long hang.
-        run_quick_scan.apply_async((str(scan_id),), retry=False)
+        task.apply_async((str(scan_id),), retry=False)
     except OperationalError as exc:
         logger.error("could not queue scan %s: %s", scan_id, type(exc).__name__)
         session.exec(
@@ -264,7 +265,7 @@ def create_quick_scan(
     viewer_id = viewer.id if viewer is not None else None
     if viewer is not None:
         ensure_profile(session, viewer)
-    _lock_target(session, body.target)
+    lock_target(session, body.target)
 
     scan = _find_reusable_scan(session, body.target, now)
     reused = scan is not None
@@ -290,7 +291,7 @@ def create_quick_scan(
     if reused:
         response.status_code = status.HTTP_200_OK
     else:
-        _enqueue(session, scan_id)
+        enqueue_scan(session, scan_id, run_quick_scan)
     return QuickScanCreated(id=scan_id, status=scan_status, reused=reused, claim_token=claim_token)
 
 
@@ -354,16 +355,22 @@ def get_scan(scan_id: UUID, session: SessionDep, viewer: ViewerDep) -> ScanOut:
     if scan is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Scan not found.")
 
+    full_report = _has_full_access(session, scan, viewer.id if viewer is not None else None)
+    # Security: a full scan has no teaser. Even its top findings could name an exposed .env
+    # and its keys, so to anyone but the owner it doesn't exist.
+    if scan.mode is ScanMode.FULL and not full_report:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Scan not found.")
+
     records = sorted(
         session.exec(select(FindingRecord).where(FindingRecord.scan_id == scan_id)),
         key=lambda item: (_SEVERITY_ORDER.index(item.severity), item.check_id),
     )
-    full_report = _has_full_access(session, scan, viewer.id if viewer is not None else None)
     shown = records if full_report else records[:TEASER_FINDINGS]
 
     return ScanOut(
         id=scan.id,
         target=scan.target,
+        mode=scan.mode,
         status=scan.status,
         progress=ScanProgress(**scan.progress_json),
         result_status=scan.result_status,

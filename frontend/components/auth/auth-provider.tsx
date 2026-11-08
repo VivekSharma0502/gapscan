@@ -49,10 +49,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     previousUserId.current = userId;
     if (previous === userId) return;
 
-    // Security: reset, not just refetch, so a report loaded for one account isn't left in
-    // memory for whoever uses this browser next.
+    // Security: reset, not just refetch, so reports and domains loaded for one account
+    // aren't left in memory for whoever uses this browser next.
     if (previous !== undefined) {
-      void queryClient.resetQueries({ queryKey: ["scan"] });
+      void queryClient.resetQueries();
     }
     // This runs here rather than in the auth callback, because Supabase deadlocks if its
     // own methods are awaited from inside that callback.

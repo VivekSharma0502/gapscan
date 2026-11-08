@@ -4,6 +4,8 @@ import { getAccessToken, signOut } from "@/lib/supabase";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const TIMEOUT_MS = 15_000;
+// Verifying waits on the site and on DNS, each of which the backend allows 20 seconds.
+const VERIFY_TIMEOUT_MS = 30_000;
 const UNREACHABLE_MESSAGE =
   "We couldn't reach the scanner. Check your connection and try again.";
 
@@ -39,9 +41,16 @@ export interface ProgressStep {
   status: "done" | "running";
 }
 
+export interface SkippedCheck {
+  check_id: string;
+  reason: string;
+  not_applicable: boolean;
+}
+
 export interface Scan {
   id: string;
   target: string;
+  mode: "quick" | "full";
   status: ScanJobStatus;
   progress: {
     completed: number;
@@ -57,7 +66,45 @@ export interface Scan {
   incomplete_reason: string | null;
   findings: Finding[];
   total_findings: number;
+  skipped: SkippedCheck[];
   teaser: boolean;
+}
+
+export type VerificationMethod = "dns" | "file";
+
+export interface Domain {
+  id: string;
+  hostname: string;
+  verified: boolean;
+  verified_at: string | null;
+  verified_method: VerificationMethod | null;
+  // True for hosts like foo.vercel.app, where the owner can't edit DNS.
+  shared_platform: boolean;
+  instructions: {
+    txt_name: string;
+    txt_value: string;
+    file_url: string;
+    file_content: string;
+  };
+  created_at: string;
+}
+
+export interface VerifyFailure {
+  method: VerificationMethod;
+  code: string;
+  message: string;
+}
+
+export interface VerifyResult {
+  domain: Domain;
+  // Empty when verification succeeded.
+  failures: VerifyFailure[];
+}
+
+export interface FullScanCreated {
+  id: string;
+  status: ScanJobStatus;
+  reused: boolean;
 }
 
 export interface QuickScanCreated {
@@ -102,8 +149,9 @@ async function send(
   path: string,
   init: RequestInit,
   token: string | null,
+  timeoutMs: number,
 ): Promise<Response> {
-  const timeout = AbortSignal.timeout(TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(timeoutMs);
   const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -122,16 +170,20 @@ async function send(
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs: number = TIMEOUT_MS,
+): Promise<T> {
   const token = await getAccessToken();
-  let response = await send(path, init, token);
+  let response = await send(path, init, token, timeoutMs);
 
   // Supabase refreshes tokens before they expire, so a refusal means this session is
   // really dead. End it and carry on as a visitor. The API refuses before doing any
   // work, so sending the request again can't start a second scan.
   if (response.status === 401 && token) {
     await signOut();
-    response = await send(path, init, null);
+    response = await send(path, init, null, timeoutMs);
   }
 
   const body: unknown = await response.json().catch(() => null);
@@ -146,6 +198,38 @@ export function startQuickScan(target: string): Promise<QuickScanCreated> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ target }),
+  });
+}
+
+export function listDomains(signal?: AbortSignal): Promise<Domain[]> {
+  return request("/api/domains", { signal });
+}
+
+export function addDomain(hostname: string): Promise<Domain> {
+  return request("/api/domains", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hostname }),
+  });
+}
+
+export function deleteDomain(id: string): Promise<void> {
+  return request(`/api/domains/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function verifyDomain(id: string): Promise<VerifyResult> {
+  return request(
+    `/api/domains/${encodeURIComponent(id)}/verify`,
+    { method: "POST" },
+    VERIFY_TIMEOUT_MS,
+  );
+}
+
+export function startFullScan(id: string): Promise<FullScanCreated> {
+  return request(`/api/domains/${encodeURIComponent(id)}/scan`, {
+    method: "POST",
   });
 }
 

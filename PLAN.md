@@ -74,7 +74,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 
 ### Phase 2 — Accounts + verified domains (Week 2–3)
 - Supabase Auth (GitHub login + email)
-- Add domain → DNS TXT token `scankit-verify=<token>` → verify
+- Add domain (3 per user for now) → prove ownership with a DNS TXT record at `_scankit-verify.<hostname>` containing `scankit-verify=<token>`, or a file at `https://<hostname>/.well-known/scankit-verify.txt` containing only the token → verify. Ownership is proven again before every full scan
 - Active checks (**verified domains only**): `/.env`, `/.git/HEAD`, `.DS_Store`, backup files, source maps, directory listing
 - Dashboard: domains, latest score, score history chart, scan history
 
@@ -101,7 +101,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 
 ## Database (draft)
 - **profiles**: id (= Supabase uid), email, name, plan, created_at
-- **domains**: id, owner_id, hostname, verify_token, verified_at, created_at
+- **domains**: id, owner_id, hostname (unique per owner, not globally), verify_token, verified_at, verified_method, created_at
 - **github_installations**: id, owner_id, installation_id, account_login, created_at
 - **repos**: id, owner_id, installation_id, full_name, is_private, created_at
 - **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, target, mode (quick|full), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, grade_cap_reason, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
@@ -116,10 +116,11 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 | GET | /api/health | |
 | POST | /api/scans/quick | anonymous, 5/min per IP, passive checks only. Returns a scan of the same hostname from the last 10 minutes instead of starting one, max 20 new scans per hostname per hour. Returns a `claim_token` to anonymous callers |
 | POST | /api/scans/claim | auth, 20/min per IP. Redeems up to 20 claim tokens for the signed-in user |
-| GET | /api/scans/{id} | status + progress + score + findings (top 3 unless the viewer owns the scan or holds a redeemed claim) |
+| GET | /api/scans/{id} | status + progress + score + findings (top 3 unless the viewer owns the scan or holds a redeemed claim). Full scans return 404 to anyone but their owner |
 | GET | /api/domains | auth |
-| POST | /api/domains | returns TXT token |
-| POST | /api/domains/{id}/verify | DNS TXT lookup |
+| POST | /api/domains | returns the token and both verification methods |
+| DELETE | /api/domains/{id} | auth. Past scans stay readable by their owner |
+| POST | /api/domains/{id}/verify | DNS TXT lookup and file fetch, with a reason for each failure |
 | POST | /api/domains/{id}/scan | full scan, verified only |
 | GET | /api/repos | auth |
 | POST | /api/repos/{id}/scan | auth |

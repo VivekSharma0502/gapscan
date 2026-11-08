@@ -7,13 +7,28 @@ from uuid import UUID
 
 from sqlmodel import update
 
+from app.checks.active_collector import attach_probes, without_probes
 from app.checks.collector import COLLECT_STEPS, collect_context
+from app.checks.ownership import prove_ownership
 from app.checks.runner import ScanReport, run_checks, selected_checks
 from app.core.db import new_session
+from app.models.domain import Domain
 from app.models.scan import FindingRecord, Scan, ScanJobStatus, utc_now
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+OWNERSHIP_STEP = "ownership_check"
+PROBE_STEP = "active_probes"
+
+_NOT_VERIFIED_REASON = "This domain isn't verified, so these checks did not run."
+_PROOF_GONE_REASON = (
+    "We could no longer find your verification record or file, so the domain was marked "
+    "unverified and these checks did not run."
+)
+_PROOF_UNKNOWN_REASON = (
+    "We couldn't re-confirm that you own this domain, so these checks did not run."
+)
 
 
 def _progress(
@@ -30,6 +45,11 @@ def _progress(
 
 def initial_quick_progress() -> dict[str, Any]:
     return _progress(0, len(COLLECT_STEPS) + len(selected_checks()), None)
+
+
+def initial_full_progress() -> dict[str, Any]:
+    total = len(COLLECT_STEPS) + 2 + len(selected_checks(allow_active=True))
+    return _progress(0, total, None)
 
 
 def _claim_scan(scan_id: UUID) -> str | None:
@@ -94,6 +114,69 @@ def _save_report(scan_id: UUID, report: ScanReport, total: int, steps: Sequence[
             for finding in report.findings
         )
         session.commit()
+
+
+def _ownership_problem(scan_id: UUID) -> str | None:
+    """Return why active checks must not run, or None once ownership is confirmed.
+
+    Security: asked here as well as in the API, and re-proven on every scan, because a domain
+    can change hands long after it was verified.
+    """
+    with new_session() as session:
+        scan = session.get_one(Scan, scan_id)
+        domain = session.get(Domain, scan.domain_id) if scan.domain_id is not None else None
+        if (
+            domain is None
+            or domain.verified_at is None
+            or domain.owner_id != scan.owner_id
+            or domain.hostname != scan.target
+        ):
+            return _NOT_VERIFIED_REASON
+        domain_id, hostname, token = domain.id, domain.hostname, domain.verify_token
+
+    result = prove_ownership(hostname, token)
+    if result.proven:
+        return None
+    if not result.definitely_gone:
+        return _PROOF_UNKNOWN_REASON
+    with new_session() as session:
+        session.exec(
+            update(Domain)
+            .where(Domain.id == domain_id)
+            .values(verified_at=None, verified_method=None)
+        )
+        session.commit()
+    return _PROOF_GONE_REASON
+
+
+@celery_app.task(name="scans.run_full")
+def run_full_scan(scan_id: str) -> None:
+    """Run the passive and active checks on a verified domain the scan's owner controls."""
+    job_id = UUID(scan_id)
+    target = _claim_scan(job_id)
+    if target is None:
+        return
+
+    total = initial_full_progress()["total"]
+    finished: list[str] = []
+
+    def on_step(step: str) -> None:
+        _update_running(job_id, progress_json=_progress(len(finished), total, step, finished))
+        finished.append(step)
+
+    try:
+        on_step(OWNERSHIP_STEP)
+        problem = _ownership_problem(job_id)
+        context = collect_context(target, on_step=on_step)
+        on_step(PROBE_STEP)
+        context = without_probes(context, problem) if problem else attach_probes(context)
+        # After a problem there are no probes, so the active checks report skipped, not passed.
+        report = run_checks(context, on_step=on_step, allow_active=True)
+        _save_report(job_id, report, total, finished)
+    except Exception as exc:
+        # Security: only the error type is logged, since the message could echo site content.
+        logger.error("scan %s failed: %s", scan_id, type(exc).__name__)
+        _update_running(job_id, status=ScanJobStatus.FAILED, finished_at=utc_now())
 
 
 @celery_app.task(name="scans.run_quick")

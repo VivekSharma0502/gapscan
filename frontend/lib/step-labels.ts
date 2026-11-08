@@ -38,6 +38,16 @@ const STEP_LABELS: Record<string, string> = {
   "dns.shared_platform_domain": "Shared platform domain",
 
   "cms.wordpress_version": "WordPress version",
+
+  ownership_check: "Confirm domain ownership",
+  active_probes: "Request sensitive paths",
+
+  "exposure.env_file": "Environment files",
+  "exposure.git_directory": "Git folder",
+  "exposure.ds_store": "Folder index files",
+  "exposure.backup_file": "Backup files",
+  "exposure.source_maps": "JavaScript source maps",
+  "exposure.directory_listing": "Directory listings",
 };
 
 export function stepLabel(step: string): string {

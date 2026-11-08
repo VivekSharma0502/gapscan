@@ -5,6 +5,7 @@ from redis.exceptions import RedisError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from app.api.domains import router as domains_router
 from app.api.health import router as health_router
 from app.api.scans import router as scans_router
 from app.core.config import settings
@@ -30,7 +31,7 @@ app.add_exception_handler(RedisError, redis_unavailable)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     # Security: sign-in uses this bearer header, not cookies, so allow_credentials stays off
     # and another site can't ride on a visitor's session.
     allow_headers=["Authorization", "Content-Type"],
@@ -38,3 +39,4 @@ app.add_middleware(
 
 app.include_router(health_router)
 app.include_router(scans_router)
+app.include_router(domains_router)

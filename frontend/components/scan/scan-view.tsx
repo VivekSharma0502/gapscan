@@ -156,7 +156,24 @@ export function ScanView({ id }: { id: string }) {
     );
   }
 
-  if (scan.status === "failed") return <ScanFailed target={scan.target} />;
+  if (scan.status === "failed") {
+    // "Scan again" starts a quick scan, which isn't what someone running a full one wants.
+    return scan.mode === "full" ? (
+      <Notice
+        title="This scan couldn't finish"
+        action={
+          <Link href="/domains" className={buttonVariants({ variant: "outline" })}>
+            Back to my domains
+          </Link>
+        }
+      >
+        Something went wrong while scanning {scan.target}. It usually works on a
+        second try.
+      </Notice>
+    ) : (
+      <ScanFailed target={scan.target} />
+    );
+  }
 
   return <ScanResults scan={scan} />;
 }

@@ -42,6 +42,7 @@ class Category(StrEnum):
     COOKIES = "cookies"
     DNS_EMAIL = "dns_email"
     CMS = "cms"
+    EXPOSURE = "exposure"
 
 
 class Platform(StrEnum):
@@ -104,10 +105,22 @@ class Input(StrEnum):
     SPF = "spf_records"
     DMARC = "dmarc_records"
     CAA = "caa_records"
+    # Requests for files that shouldn't be public. Only ever collected for a verified domain.
+    PROBES = "probes"
 
 
 class SkipCheck(Exception):
     """Raised by a check that has its inputs but still cannot give a reliable answer."""
+
+
+@dataclass(frozen=True)
+class Probe:
+    """One active request. Lives only in memory during the scan, and is never saved."""
+
+    path: str
+    # None when the server gave no trustworthy answer, which is not the same as "not found".
+    status_code: int | None = None
+    content: bytes = b""
 
 
 @dataclass(frozen=True)
@@ -124,6 +137,8 @@ class ScanContext:
     spf_records: list[str] | None = None
     dmarc_records: list[str] | None = None
     caa_records: list[str] | None = None
+    # Keyed by path. None unless ownership was confirmed for this scan.
+    probes: Mapping[str, Probe] | None = None
     # Set when the hostname sits under a domain shared by many customers, like vercel.app.
     shared_platform_suffix: str | None = None
     # Why an input is missing, shown to the user next to the checks it prevented.

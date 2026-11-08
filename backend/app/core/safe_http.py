@@ -109,6 +109,10 @@ class TooManyRedirectsError(SafeHttpError):
     """The redirect chain was longer than MAX_REDIRECTS."""
 
 
+class OffHostRedirectError(SafeHttpError):
+    """A redirect pointed outside the hosts this request is allowed to visit."""
+
+
 class RequestFailedError(SafeHttpError):
     """DNS, network, TLS or deadline failure."""
 
@@ -394,14 +398,16 @@ def _timeouts(deadline: float) -> httpx.Timeout:
     )
 
 
-def _read_capped(response: httpx.Response, deadline: float) -> tuple[bytes, bool]:
+def _read_capped(
+    response: httpx.Response, deadline: float, max_bytes: int = MAX_RESPONSE_BYTES
+) -> tuple[bytes, bool]:
     # Security: counts decompressed bytes and stops at the cap, so a compressed response
     # cannot expand into an unbounded body.
     body = bytearray()
     for chunk in response.iter_bytes():
         if time.monotonic() > deadline:
             raise RequestFailedError("deadline exceeded")
-        space_left = MAX_RESPONSE_BYTES - len(body)
+        space_left = max_bytes - len(body)
         if len(chunk) > space_left:
             body += chunk[:space_left]
             return bytes(body), True
@@ -409,7 +415,7 @@ def _read_capped(response: httpx.Response, deadline: float) -> tuple[bytes, bool
     return bytes(body), False
 
 
-def _send_pinned(method: str, url: httpx.URL, deadline: float) -> _Hop:
+def _send_pinned(method: str, url: httpx.URL, deadline: float, max_bytes: int) -> _Hop:
     host = url.raw_host.decode("ascii")
     ip = _validated_ip(host, deadline)
     timeouts = _timeouts(deadline)
@@ -446,7 +452,7 @@ def _send_pinned(method: str, url: httpx.URL, deadline: float) -> _Hop:
                     location = response.headers.get("location")
                 content, truncated = b"", False
                 if location is None and method != "HEAD":
-                    content, truncated = _read_capped(response, deadline)
+                    content, truncated = _read_capped(response, deadline, max_bytes)
                 return _Hop(response.status_code, response.headers, content, truncated, location)
             finally:
                 response.close()
@@ -454,14 +460,19 @@ def _send_pinned(method: str, url: httpx.URL, deadline: float) -> _Hop:
         raise RequestFailedError("request failed") from exc
 
 
-def _fetch(method: str, url: str) -> SafeResponse:
+def _fetch(
+    method: str,
+    url: str,
+    allowed_hosts: frozenset[str] | None = None,
+    max_bytes: int = MAX_RESPONSE_BYTES,
+) -> SafeResponse:
     deadline = time.monotonic() + TOTAL_DEADLINE_SECONDS
     current = _parse_url(url)
     redirects: list[str] = []
 
     # One initial request plus at most MAX_REDIRECTS followed redirects.
     for _ in range(MAX_REDIRECTS + 1):
-        hop = _send_pinned(method, current, deadline)
+        hop = _send_pinned(method, current, deadline, max_bytes)
         if hop.location is None:
             return SafeResponse(
                 url=str(current),
@@ -478,13 +489,24 @@ def _fetch(method: str, url: str) -> SafeResponse:
         except httpx.InvalidURL as exc:
             raise BlockedTargetError("invalid URL") from exc
         current = _parse_url(target)
+        # Security: refused before the next request is sent. Active probes are only allowed
+        # on verified domains, so merely following this redirect would break that rule.
+        if allowed_hosts is not None:
+            if current.raw_host.decode("ascii").rstrip(".") not in allowed_hosts:
+                raise OffHostRedirectError("redirect left the allowed hosts")
         redirects.append(str(current))
 
     raise TooManyRedirectsError("too many redirects")
 
 
-def safe_get(url: str) -> SafeResponse:
-    return _fetch("GET", url)
+def safe_get(
+    url: str,
+    *,
+    allowed_hosts: frozenset[str] | None = None,
+    max_bytes: int = MAX_RESPONSE_BYTES,
+) -> SafeResponse:
+    """GET a URL. With allowed_hosts, a redirect to any other host raises instead of being sent."""
+    return _fetch("GET", url, allowed_hosts, min(max_bytes, MAX_RESPONSE_BYTES))
 
 
 def safe_head(url: str) -> SafeResponse:

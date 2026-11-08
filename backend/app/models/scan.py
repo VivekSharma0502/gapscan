@@ -65,14 +65,18 @@ class Scan(SQLModel, table=True):
     # Security: a random UUID, because anyone holding the id can read the scan's teaser.
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     # Null means nobody has claimed this anonymous scan yet. Others who scanned the same site
-    # can also hold a redeemed ScanClaim for it. Domains and repos arrive in later steps.
+    # can also hold a redeemed ScanClaim for it. Repos arrive in a later step.
     owner_id: UUID | None = Field(
         default=None,
         sa_column=Column(
             Uuid, ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True, index=True
         ),
     )
-    domain_id: UUID | None = None
+    # Cleared if the domain is deleted, so its owner keeps the report.
+    domain_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(Uuid, ForeignKey("domains.id", ondelete="SET NULL"), nullable=True),
+    )
     repo_id: UUID | None = None
     target_type: TargetType = Field(sa_column=_enum_column(TargetType))
     target: str = Field(max_length=253)
