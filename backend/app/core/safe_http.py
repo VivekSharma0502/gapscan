@@ -72,6 +72,7 @@ _X509_FAILURE_DETAILS = {
 _LOCAL_TLS_LIMITS = {"NO_PROTOCOLS_AVAILABLE", "NO_CIPHERS_AVAILABLE"}
 
 # Names that only ever mean something on a private network.
+_MAX_HOSTNAME_LENGTH = 253
 _BLOCKED_HOSTNAMES = {"localhost"}
 _BLOCKED_SUFFIXES = (".localhost", ".local", ".internal")
 
@@ -333,6 +334,22 @@ def _validated_name(host: str) -> str:
         raise BlockedTargetError("address not allowed")
     if name in _BLOCKED_HOSTNAMES or name.endswith(_BLOCKED_SUFFIXES):
         raise BlockedTargetError("host not allowed")
+    return name
+
+
+def normalize_scan_target(value: str) -> str:
+    """Return the lowercase domain from a user's domain or http(s) URL, or raise.
+
+    Security: runs the guard's own URL and name rules when the request arrives, so a bad
+    target never reaches the queue. DNS is still checked by the worker, on every request.
+    IP addresses are refused because scans are for named sites, not for walking IP ranges.
+    """
+    text = value.strip()
+    parsed = _parse_url(text if "://" in text else f"https://{text}")
+    # raw_host is the ASCII form, so a look-alike Unicode name can't dodge the checks.
+    name = _validated_name(parsed.raw_host.decode("ascii"))
+    if "." not in name or len(name) > _MAX_HOSTNAME_LENGTH:
+        raise BlockedTargetError("invalid host")
     return name
 
 

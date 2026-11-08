@@ -1,0 +1,474 @@
+import hashlib
+from collections.abc import Iterator
+from datetime import timedelta
+from typing import Any
+from uuid import UUID, uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+from kombu.exceptions import OperationalError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from sqlalchemy import Engine
+from sqlmodel import Session, select
+
+from app.api import scans as scans_api
+from app.checks.base import Category, Severity
+from app.checks.catalog import CATALOG
+from app.checks.runner import ScanStatus
+from app.core.auth import get_viewer_id
+from app.core.rate_limit import limiter
+from app.main import app
+from app.models.scan import (
+    FindingRecord,
+    Scan,
+    ScanClaim,
+    ScanJobStatus,
+    ScanMode,
+    TargetType,
+    utc_now,
+)
+from app.workers.tasks import initial_quick_progress
+
+CHECK_IDS = sorted(CATALOG)
+
+
+class FakeQueue:
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.error: Exception | None = None
+
+    def apply_async(self, args: tuple[str], retry: bool = True) -> None:
+        if self.error is not None:
+            raise self.error
+        self.sent.append(args[0])
+
+
+@pytest.fixture
+def queue(monkeypatch: pytest.MonkeyPatch) -> FakeQueue:
+    fake = FakeQueue()
+    monkeypatch.setattr(scans_api, "run_quick_scan", fake)
+    return fake
+
+
+@pytest.fixture
+def client(db_engine: Engine, queue: FakeQueue) -> Iterator[TestClient]:
+    limiter.reset()
+    yield TestClient(app)
+    limiter.reset()
+    app.dependency_overrides.clear()
+
+
+def add_scan(engine: Engine, age_minutes: float = 0, **overrides: Any) -> UUID:
+    fields: dict[str, Any] = {
+        "target_type": TargetType.WEB,
+        "target": "example.com",
+        "mode": ScanMode.QUICK,
+        "status": ScanJobStatus.DONE,
+        "progress_json": initial_quick_progress(),
+        "created_at": utc_now() - timedelta(minutes=age_minutes),
+    }
+    with Session(engine) as session:
+        scan = Scan(**(fields | overrides))
+        session.add(scan)
+        session.commit()
+        return scan.id
+
+
+def add_finding(engine: Engine, scan_id: UUID, check_id: str, severity: Severity) -> None:
+    with Session(engine) as session:
+        session.add(
+            FindingRecord(
+                scan_id=scan_id,
+                check_id=check_id,
+                category=Category.TLS,
+                severity=severity,
+                title=CATALOG[check_id].title if check_id in CATALOG else "Old check",
+                evidence_masked="evidence",
+            )
+        )
+        session.commit()
+
+
+def load(engine: Engine, scan_id: str | UUID) -> Scan:
+    with Session(engine) as session:
+        return session.get_one(Scan, UUID(str(scan_id)))
+
+
+def claims(engine: Engine) -> list[ScanClaim]:
+    with Session(engine) as session:
+        return list(session.exec(select(ScanClaim)))
+
+
+def post(client: TestClient, target: str = "example.com") -> Any:
+    return client.post("/api/scans/quick", json={"target": target})
+
+
+# Starting a scan
+
+
+def test_quick_scan_is_queued(client: TestClient, db_engine: Engine, queue: FakeQueue) -> None:
+    result = post(client)
+
+    assert result.status_code == 202
+    body = result.json()
+    assert body["status"] == "queued"
+    assert body["reused"] is False
+    assert queue.sent == [body["id"]]
+    scan = load(db_engine, body["id"])
+    assert scan.target == "example.com"
+    assert scan.mode is ScanMode.QUICK
+    assert scan.owner_id is None
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["example.com", "EXAMPLE.com", "https://example.com/some/path?x=1", "http://example.com:80/"],
+)
+def test_target_is_reduced_to_its_hostname(
+    client: TestClient, db_engine: Engine, target: str
+) -> None:
+    assert load(db_engine, post(client, target).json()["id"]).target == "example.com"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "",
+        "localhost",
+        "intranet",
+        "foo.local",
+        "foo.internal",
+        "127.0.0.1",
+        "8.8.8.8",
+        "[::1]",
+        "http://[2001:4860:4860::8888]/",
+        "https://example.com:8443/",
+        "https://user:pw@example.com/",
+        "ftp://example.com/",
+        "exa mple.com",
+        "a" * 300 + ".com",
+        "https://example.com/" + "a" * 3000,
+    ],
+)
+def test_bad_targets_are_rejected(client: TestClient, queue: FakeQueue, target: str) -> None:
+    assert post(client, target).status_code == 422
+    assert queue.sent == []
+
+
+def test_unknown_fields_are_rejected(client: TestClient) -> None:
+    body = {"target": "example.com", "mode": "full"}
+    assert client.post("/api/scans/quick", json=body).status_code == 422
+
+
+def test_rate_limit_is_five_per_minute_per_ip(client: TestClient) -> None:
+    codes = [post(client, f"site{index}.example.com").status_code for index in range(6)]
+    assert codes == [202, 202, 202, 202, 202, 429]
+
+
+def test_limiter_outage_fails_closed(
+    client: TestClient, queue: FakeQueue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def down(*_args: Any, **_kwargs: Any) -> bool:
+        raise RedisConnectionError("refused")
+
+    monkeypatch.setattr(limiter._limiter, "hit", down)
+
+    assert post(client).status_code == 503
+    assert queue.sent == []
+
+
+def test_queue_failure_returns_503_and_does_not_block_a_retry(
+    client: TestClient, db_engine: Engine, queue: FakeQueue
+) -> None:
+    queue.error = OperationalError("broker down")
+    assert post(client).status_code == 503
+
+    with Session(db_engine) as session:
+        [scan] = session.exec(select(Scan)).all()
+    assert scan.status is ScanJobStatus.FAILED
+
+    queue.error = None
+    retried = post(client)
+    assert retried.status_code == 202
+    assert retried.json()["id"] != str(scan.id)
+
+
+# Claim tokens
+
+
+def test_claim_token_is_stored_only_as_a_hash(client: TestClient, db_engine: Engine) -> None:
+    token = post(client).json()["claim_token"]
+
+    assert len(token) >= 40
+    [claim] = claims(db_engine)
+    assert claim.token_hash == hashlib.sha256(token.encode()).hexdigest()
+    assert claim.token_hash != token
+
+
+def test_reused_scan_gets_a_separate_claim_token(client: TestClient, db_engine: Engine) -> None:
+    first = post(client).json()
+    second = post(client).json()
+
+    assert first["id"] == second["id"]
+    assert first["claim_token"] != second["claim_token"]
+    assert len(claims(db_engine)) == 2
+
+
+def test_signed_in_viewer_owns_the_scan_and_gets_no_token(
+    client: TestClient, db_engine: Engine
+) -> None:
+    viewer = uuid4()
+    app.dependency_overrides[get_viewer_id] = lambda: viewer
+
+    body = post(client).json()
+
+    assert body["claim_token"] is None
+    assert load(db_engine, body["id"]).owner_id == viewer
+    assert claims(db_engine) == []
+
+
+# Reusing a recent scan
+
+
+@pytest.mark.parametrize(
+    ("age_minutes", "scan_status"),
+    [
+        (9, ScanJobStatus.DONE),
+        (1, ScanJobStatus.QUEUED),
+        (4, ScanJobStatus.RUNNING),
+    ],
+)
+def test_recent_scan_is_returned(
+    client: TestClient,
+    db_engine: Engine,
+    queue: FakeQueue,
+    age_minutes: int,
+    scan_status: ScanJobStatus,
+) -> None:
+    existing = add_scan(db_engine, age_minutes=age_minutes, status=scan_status)
+
+    result = post(client)
+
+    assert result.status_code == 200
+    assert result.json()["id"] == str(existing)
+    assert result.json()["reused"] is True
+    assert result.json()["status"] == scan_status.value
+    assert queue.sent == []
+
+
+def test_incomplete_scan_is_still_reused(
+    client: TestClient, db_engine: Engine, queue: FakeQueue
+) -> None:
+    existing = add_scan(db_engine, result_status=ScanStatus.INCOMPLETE)
+    assert post(client).json()["id"] == str(existing)
+    assert queue.sent == []
+
+
+@pytest.mark.parametrize(
+    ("age_minutes", "scan_status"),
+    [
+        (11, ScanJobStatus.DONE),
+        (1, ScanJobStatus.FAILED),
+        (6, ScanJobStatus.QUEUED),
+        (6, ScanJobStatus.RUNNING),
+    ],
+)
+def test_old_failed_or_abandoned_scans_are_not_reused(
+    client: TestClient,
+    db_engine: Engine,
+    age_minutes: int,
+    scan_status: ScanJobStatus,
+) -> None:
+    existing = add_scan(db_engine, age_minutes=age_minutes, status=scan_status)
+
+    result = post(client)
+
+    assert result.status_code == 202
+    assert result.json()["id"] != str(existing)
+
+
+def test_other_hostnames_and_modes_are_not_reused(client: TestClient, db_engine: Engine) -> None:
+    add_scan(db_engine, target="other.example.com")
+    add_scan(db_engine, mode=ScanMode.FULL)
+    assert post(client).status_code == 202
+
+
+# Hourly cap per hostname
+
+
+def add_old_scans(engine: Engine, count: int, age_minutes: float = 30, **overrides: Any) -> None:
+    for _ in range(count):
+        add_scan(engine, age_minutes=age_minutes, **overrides)
+
+
+def test_hourly_cap_blocks_the_twenty_first_scan(
+    client: TestClient, db_engine: Engine, queue: FakeQueue
+) -> None:
+    add_old_scans(db_engine, 20)
+
+    result = post(client)
+
+    assert result.status_code == 429
+    assert "retry-after" in result.headers
+    assert queue.sent == []
+
+
+def test_hourly_cap_allows_the_twentieth_scan(client: TestClient, db_engine: Engine) -> None:
+    add_old_scans(db_engine, 19)
+    assert post(client).status_code == 202
+
+
+def test_failed_scans_count_towards_the_cap(client: TestClient, db_engine: Engine) -> None:
+    add_old_scans(db_engine, 20, age_minutes=1, status=ScanJobStatus.FAILED)
+    assert post(client).status_code == 429
+
+
+def test_scans_older_than_an_hour_do_not_count(client: TestClient, db_engine: Engine) -> None:
+    add_old_scans(db_engine, 20, age_minutes=61)
+    assert post(client).status_code == 202
+
+
+def test_cap_applies_per_hostname(client: TestClient, db_engine: Engine) -> None:
+    add_old_scans(db_engine, 20)
+    assert post(client, "other.example.com").status_code == 202
+
+
+def test_reuse_is_still_served_when_the_cap_is_full(client: TestClient, db_engine: Engine) -> None:
+    add_old_scans(db_engine, 20)
+    existing = add_scan(db_engine, age_minutes=2)
+    assert post(client).json()["id"] == str(existing)
+
+
+# Reading a scan
+
+
+def test_anonymous_viewer_gets_score_and_top_three_findings(
+    client: TestClient, db_engine: Engine
+) -> None:
+    scan_id = add_scan(db_engine, score=61, grade="C", result_status=ScanStatus.COMPLETE)
+    add_finding(db_engine, scan_id, CHECK_IDS[0], Severity.LOW)
+    add_finding(db_engine, scan_id, CHECK_IDS[1], Severity.CRITICAL)
+    add_finding(db_engine, scan_id, CHECK_IDS[2], Severity.INFO)
+    add_finding(db_engine, scan_id, CHECK_IDS[3], Severity.HIGH)
+    add_finding(db_engine, scan_id, CHECK_IDS[4], Severity.MEDIUM)
+
+    body = client.get(f"/api/scans/{scan_id}").json()
+
+    assert body["teaser"] is True
+    assert body["score"] == 61
+    assert body["grade"] == "C"
+    assert [item["severity"] for item in body["findings"]] == ["critical", "high", "medium"]
+    assert body["findings"][0]["fix"]["how_to_fix"]
+    assert body["skipped"] == []
+
+
+def test_response_never_exposes_owner_or_claim_data(client: TestClient, db_engine: Engine) -> None:
+    token = post(client).json()["claim_token"]
+    [claim] = claims(db_engine)
+
+    result = client.get(f"/api/scans/{claim.scan_id}")
+
+    assert token not in result.text
+    assert claim.token_hash not in result.text
+    assert "owner_id" not in result.json()
+    assert "claim_token" not in result.json()
+
+
+def test_owner_gets_every_finding(client: TestClient, db_engine: Engine) -> None:
+    viewer = uuid4()
+    scan_id = add_scan(
+        db_engine,
+        owner_id=viewer,
+        skipped_json=[{"check_id": "x", "reason": "y", "not_applicable": False}],
+    )
+    for check_id in CHECK_IDS[:5]:
+        add_finding(db_engine, scan_id, check_id, Severity.LOW)
+    app.dependency_overrides[get_viewer_id] = lambda: viewer
+
+    body = client.get(f"/api/scans/{scan_id}").json()
+
+    assert body["teaser"] is False
+    assert len(body["findings"]) == 5
+    assert body["skipped"][0]["check_id"] == "x"
+
+
+def test_signed_in_stranger_gets_only_the_teaser(client: TestClient, db_engine: Engine) -> None:
+    scan_id = add_scan(db_engine, owner_id=uuid4())
+    for check_id in CHECK_IDS[:5]:
+        add_finding(db_engine, scan_id, check_id, Severity.LOW)
+    app.dependency_overrides[get_viewer_id] = uuid4
+
+    body = client.get(f"/api/scans/{scan_id}").json()
+
+    assert body["teaser"] is True
+    assert len(body["findings"]) == 3
+
+
+def test_partial_score_keeps_its_label(client: TestClient, db_engine: Engine) -> None:
+    scan_id = add_scan(
+        db_engine,
+        score=80,
+        grade="B",
+        result_status=ScanStatus.PARTIAL,
+        score_label="Partial — 2 checks skipped",
+    )
+
+    body = client.get(f"/api/scans/{scan_id}").json()
+
+    assert body["result_status"] == "partial"
+    assert body["score_label"] == "Partial — 2 checks skipped"
+
+
+def test_progress_is_returned_while_running(client: TestClient, db_engine: Engine) -> None:
+    progress = {"completed": 2, "total": 29, "current": "http_fetch"}
+    scan_id = add_scan(db_engine, status=ScanJobStatus.RUNNING, progress_json=progress)
+
+    body = client.get(f"/api/scans/{scan_id}").json()
+
+    assert body["status"] == "running"
+    assert body["progress"] == progress
+    assert body["score"] is None
+    assert body["findings"] == []
+
+
+@pytest.mark.parametrize("scan_status", [ScanJobStatus.QUEUED, ScanJobStatus.RUNNING])
+def test_abandoned_scan_reads_as_failed(
+    client: TestClient, db_engine: Engine, scan_status: ScanJobStatus
+) -> None:
+    scan_id = add_scan(db_engine, age_minutes=6, status=scan_status)
+
+    assert client.get(f"/api/scans/{scan_id}").json()["status"] == "failed"
+    assert load(db_engine, scan_id).status is ScanJobStatus.FAILED
+
+
+def test_finding_from_a_removed_check_still_loads(client: TestClient, db_engine: Engine) -> None:
+    scan_id = add_scan(db_engine)
+    add_finding(db_engine, scan_id, "removed.check", Severity.LOW)
+
+    body = client.get(f"/api/scans/{scan_id}").json()
+
+    assert body["findings"][0]["fix"] is None
+
+
+def test_unknown_scan_is_404(client: TestClient) -> None:
+    assert client.get(f"/api/scans/{uuid4()}").status_code == 404
+
+
+def test_malformed_scan_id_is_rejected(client: TestClient) -> None:
+    assert client.get("/api/scans/not-a-uuid").status_code == 422
+
+
+# CORS
+
+
+def test_cors_allows_the_frontend_to_post_json(client: TestClient) -> None:
+    result = client.options(
+        "/api/scans/quick",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert result.status_code == 200
+    assert result.headers["access-control-allow-origin"] == "http://localhost:3000"

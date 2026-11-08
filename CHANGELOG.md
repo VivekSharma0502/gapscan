@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1c: quick scan routes
+
+**Added**
+- `POST /api/scans/quick` starts a passive scan from a domain or http(s) URL.
+- `GET /api/scans/{id}` returns status, progress, score and findings. Anyone but the scan's owner gets the top 3 findings. Accounts arrive in Phase 2, so today that is everyone.
+- A scan still unfinished after 5 minutes reads as failed, so a dead worker can't leave the page polling forever.
+- A `claim_token` for anonymous requests, so Phase 2 can attach a scan to a new account. It is returned once, by the POST only.
+
+**Security**
+- 5 scans per minute per IP, counted in Redis so the limit holds across API processes. If Redis is down the API returns 503 and starts nothing.
+- A scan of the same hostname from the last 10 minutes is returned instead of starting a new one, and each hostname gets at most 20 new scans per hour across all IPs, so the scanner can't be used to flood a site. Failed scans aren't reused but do count towards the cap, since they may have sent traffic.
+- A Postgres lock per hostname stops simultaneous requests from getting past both limits.
+- Targets go through the SSRF guard's rules on arrival. IP addresses and single-label names are refused.
+- The response uses a fixed model, so owner ids and claim data can't leak into it.
+
 ## 2026-11-08: Phase 1, step 1c: Celery scan worker
 
 **Added**

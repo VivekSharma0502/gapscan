@@ -113,8 +113,8 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 | Method | Route | Notes |
 |---|---|---|
 | GET | /api/health | |
-| POST | /api/scans/quick | anonymous, rate-limited, passive checks only |
-| GET | /api/scans/{id} | status + progress + findings (teaser if anonymous) |
+| POST | /api/scans/quick | anonymous, 5/min per IP, passive checks only. Returns a scan of the same hostname from the last 10 minutes instead of starting one, max 20 new scans per hostname per hour. Returns a `claim_token` to anonymous callers |
+| GET | /api/scans/{id} | status + progress + score + findings (top 3 unless the viewer owns the scan) |
 | GET | /api/domains | auth |
 | POST | /api/domains | returns TXT token |
 | POST | /api/domains/{id}/verify | DNS TXT lookup |

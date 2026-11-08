@@ -81,3 +81,16 @@ The worker runs the scans, so without it they stay queued and are marked failed 
 npm run lint
 npm run build
 ```
+
+## Deploy
+
+Behind a reverse proxy or a platform load balancer, tell uvicorn which proxy to trust, so the API sees each visitor's real IP:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --forwarded-allow-ips="<your proxy's IP or CIDR>"
+```
+
+- Without `--forwarded-allow-ips`, every visitor appears to come from the proxy and they all share one `POST /api/scans/quick` limit of 5 per minute.
+- Don't use `*` unless the proxy is the only way to reach the app. Otherwise a client can forge `X-Forwarded-For` and get around the limit.
+
+Run the worker without `--pool=solo` on Linux. The default pool runs scans in parallel and enforces the task time limit.
