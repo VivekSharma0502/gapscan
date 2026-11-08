@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1b: check registry and scoring
+
+**Added**
+- `app/checks/`: `Finding`, `ScanContext`, a `@check` registry and a text catalog keyed by `check_id`. Checks are pure functions of the context, so they can be tested with fixtures and cannot bypass the SSRF guard.
+- A check with no text, or a fix missing a platform, fails at import, so a finding can never ship blank.
+- Score and grade from `PLAN.md`.
+
+**Security**
+- Evidence is stripped of control characters and capped in length, because it is copied from responses the scanned site controls.
+
 ## 2026-11-08: DNS fallback chain for networks that block UDP
 
 **Added**
