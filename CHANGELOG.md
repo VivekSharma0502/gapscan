@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1c: progress callbacks and passive-only gate
+
+**Added**
+- `collect_context` and `run_checks` report each step as it starts, so a worker can show live progress. Collection counts as steps too, because it takes nearly all of a scan's time.
+
+**Security**
+- Checks can be marked `active`, and `run_checks` leaves them out unless a caller opts in. No active checks exist yet, so this stops Phase 2's from running in quick scans.
+
 ## 2026-11-08: Phase 1, step 1c: Postgres, scan tables and migrations
 
 **Added**

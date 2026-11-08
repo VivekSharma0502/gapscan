@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 # Imported for their side effect: each module registers its checks with the registry.
 from app.checks import cms, cookies, dns_email, headers, tls  # noqa: F401
-from app.checks.base import Finding, Input, ScanContext, Severity, SkipCheck
+from app.checks.base import Finding, Input, ScanContext, Severity, SkipCheck, StepCallback
 from app.checks.registry import CheckSpec, all_checks
 from app.checks.scoring import calculate_score, grade_for
 
@@ -57,11 +57,20 @@ def _partial_label(count: int) -> str:
     return f"Partial — {count} check{'' if count == 1 else 's'} skipped"
 
 
-def run_checks(ctx: ScanContext) -> ScanReport:
+def selected_checks(allow_active: bool = False) -> list[CheckSpec]:
+    return [spec for spec in all_checks() if allow_active or not spec.active]
+
+
+def run_checks(
+    ctx: ScanContext, *, on_step: StepCallback | None = None, allow_active: bool = False
+) -> ScanReport:
+    """Run the checks. Security: active checks are opt-in, so a caller can't run them by accident."""
     findings: list[Finding] = []
     skipped: list[SkippedCheck] = []
 
-    for spec in all_checks():
+    for spec in selected_checks(allow_active):
+        if on_step is not None:
+            on_step(spec.check_id)
         missing = _missing_input(spec, ctx)
         if missing is not None:
             skipped.append(

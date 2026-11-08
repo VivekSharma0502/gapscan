@@ -20,13 +20,15 @@ class CheckSpec:
     category: Category
     func: CheckFunc
     requires: frozenset[Input]
+    # Active checks probe beyond normal page loads, so they need a verified domain.
+    active: bool = False
 
 
 _REGISTRY: dict[str, CheckSpec] = {}
 
 
 def check(
-    check_id: str, category: Category, requires: Iterable[Input] = ()
+    check_id: str, category: Category, requires: Iterable[Input] = (), active: bool = False
 ) -> Callable[[CheckFunc], CheckFunc]:
     """Register a check. Fails at import if its text is missing, so it can never ship blank."""
 
@@ -35,7 +37,7 @@ def check(
             raise ValueError(f"duplicate check id: {check_id}")
         if check_id not in CATALOG:
             raise ValueError(f"no catalog text for check: {check_id}")
-        _REGISTRY[check_id] = CheckSpec(check_id, category, func, frozenset(requires))
+        _REGISTRY[check_id] = CheckSpec(check_id, category, func, frozenset(requires), active)
         return func
 
     return register

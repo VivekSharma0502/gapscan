@@ -6,7 +6,13 @@ that needed it are reported as skipped instead of passed.
 
 import ipaddress
 
-from app.checks.base import BLOCKED_STATUSES, Input, ScanContext, shows_real_page
+from app.checks.base import (
+    BLOCKED_STATUSES,
+    Input,
+    ScanContext,
+    StepCallback,
+    shows_real_page,
+)
 from app.checks.domains import registrable_domain, shared_platform_suffix
 from app.core.safe_http import (
     BlockedTargetError,
@@ -24,6 +30,7 @@ BLOCKED_REASON = "This address can't be scanned."
 _DNS_FAILED_REASON = "The DNS lookup did not complete."
 _ALL_INPUTS = tuple(Input)
 _DNS_INPUTS = (Input.SPF, Input.DMARC, Input.CAA)
+COLLECT_STEPS = ("tls_probe", "https_fetch", "http_fetch", "dns_lookup")
 
 
 def _has_no_https(tls: TlsProbe | None) -> bool:
@@ -121,10 +128,12 @@ def _collect_dns(hostname: str) -> tuple[dict[str, object], dict[Input, str], se
     return fields, reasons, set()
 
 
-def collect_context(hostname: str) -> ScanContext:
+def collect_context(hostname: str, *, on_step: StepCallback | None = None) -> ScanContext:
     name = hostname.lower().rstrip(".")
     reasons: dict[Input, str] = {}
+    start_step = on_step or (lambda _step: None)
 
+    start_step("tls_probe")
     try:
         tls = safe_tls_probe(name)
     except BlockedTargetError:
@@ -134,8 +143,10 @@ def collect_context(hostname: str) -> ScanContext:
         tls = None
         reasons[Input.TLS] = "We could not complete a TLS connection."
 
+    start_step("https_fetch")
     https, https_reason = _fetch_homepage(name, tls)
 
+    start_step("http_fetch")
     try:
         http = safe_get(f"http://{name}/")
     except SafeHttpError:
@@ -160,6 +171,7 @@ def collect_context(hostname: str) -> ScanContext:
         reasons[Input.HTTPS] = https_reason
         reasons[Input.HOMEPAGE] = https_reason
 
+    start_step("dns_lookup")
     dns_fields, dns_reasons, dns_not_applicable = _collect_dns(name)
     reasons.update(dns_reasons)
     not_applicable |= dns_not_applicable

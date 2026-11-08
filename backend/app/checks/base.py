@@ -4,7 +4,7 @@ A check is a pure function of a ScanContext. All network access happens once, in
 collector, so checks can be tested with fixtures and cannot bypass the SSRF guard.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -14,6 +14,9 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from app.core.safe_http import SafeResponse, TlsProbe
 
 BLOCKED_STATUSES = frozenset({403, 429, 503})
+
+# Told the name of each step as it starts, so a caller can report progress.
+StepCallback = Callable[[str], None]
 
 
 def shows_real_page(status_code: int) -> bool:
