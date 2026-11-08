@@ -23,7 +23,7 @@ export function ScanLog({ target, steps, total }: ScanLogProps) {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight break-words">
+        <h1 className="text-2xl font-semibold tracking-tight wrap-anywhere">
           Scanning {target}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">

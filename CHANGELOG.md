@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-08: Phase 1, step 1d: results page
+
+**Added**
+- Results on `/scan/[id]`: a score gauge with grade and any `score_label`, or `incomplete_reason` and no gauge when the scan has no score.
+- Findings grouped by severity, each with "What it means" and "How to fix" tabs. Fixes are shown per platform with copy buttons, and choosing a platform once applies to every finding.
+- A sign-up teaser saying how many findings are hidden. Its button is disabled until accounts arrive in Phase 2.
+
+**Security**
+- Evidence comes from the scanned site, so it is only ever rendered as text.
+
 ## 2026-11-08: Phase 1, step 1d: live scan progress
 
 **Added**

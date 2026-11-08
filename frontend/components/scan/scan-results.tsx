@@ -1,0 +1,154 @@
+"use client";
+
+import { TriangleAlert } from "lucide-react";
+import { useState } from "react";
+
+import { FindingCard } from "@/components/scan/finding-card";
+import { ScoreGauge } from "@/components/scan/score-gauge";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import type { Finding, Platform, Scan } from "@/lib/api";
+import { SEVERITIES, SEVERITY_STYLES } from "@/lib/severity";
+import { cn } from "@/lib/utils";
+
+function issues(count: number): string {
+  return `${count} ${count === 1 ? "issue" : "issues"}`;
+}
+
+function ScoreSummary({ scan }: { scan: Scan }) {
+  const { score, grade, target } = scan;
+
+  // The API sends no score when too little could be checked.
+  if (score === null || grade === null) {
+    return (
+      <section className="flex flex-col gap-3 rounded-xl bg-card p-6 ring-1 ring-foreground/10">
+        <TriangleAlert className="size-5 text-muted-foreground" aria-hidden />
+        <h1 className="text-2xl font-semibold tracking-tight wrap-anywhere">
+          We couldn&apos;t fully check {target}
+        </h1>
+        {scan.incomplete_reason && (
+          <p className="text-sm text-pretty">{scan.incomplete_reason}</p>
+        )}
+        <p className="text-sm text-muted-foreground">
+          There is no score, because a grade based on so little would be
+          misleading.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="flex flex-col items-center gap-6 rounded-xl bg-card p-6 ring-1 ring-foreground/10 sm:flex-row sm:gap-8">
+      <ScoreGauge score={score} grade={grade} />
+      <div className="flex w-full min-w-0 flex-col items-center gap-2 text-center sm:items-start sm:text-left">
+        <p className="text-sm text-muted-foreground">Security score for</p>
+        <h1 className="max-w-full text-2xl font-semibold tracking-tight wrap-anywhere">
+          {target}
+        </h1>
+        {scan.score_label && <Badge variant="outline">{scan.score_label}</Badge>}
+        <p className="text-sm text-muted-foreground">
+          {scan.total_findings === 0
+            ? "Passive checks found no issues."
+            : `Passive checks found ${issues(scan.total_findings)}.`}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function FindingGroups({ findings }: { findings: Finding[] }) {
+  // Held here so choosing a platform once applies to every finding.
+  const [platform, setPlatform] = useState<Platform>("vercel");
+
+  return (
+    <div className="flex flex-col gap-8">
+      {SEVERITIES.map((severity) => {
+        const group = findings.filter((item) => item.severity === severity);
+        if (group.length === 0) return null;
+        const style = SEVERITY_STYLES[severity];
+
+        return (
+          <section key={severity} className="flex flex-col gap-3">
+            <h3>
+              <Badge
+                variant="outline"
+                className={cn("text-foreground", style.badge)}
+              >
+                <span
+                  className={cn("size-1.5 rounded-full", style.dot)}
+                  aria-hidden
+                />
+                {style.label}
+                <span className="text-muted-foreground tabular-nums">
+                  {group.length}
+                </span>
+              </Badge>
+            </h3>
+            {group.map((finding) => (
+              <FindingCard
+                key={finding.check_id}
+                finding={finding}
+                platform={platform}
+                onPlatformChange={setPlatform}
+              />
+            ))}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function SignupTeaser({ hidden }: { hidden: number }) {
+  return (
+    <section className="flex flex-col items-start gap-3 rounded-xl bg-card p-6 ring-1 ring-foreground/10">
+      <h2 className="text-lg font-semibold tracking-tight">
+        {hidden > 0
+          ? `Sign up to see the other ${issues(hidden)}`
+          : "Sign up to keep this report"}
+      </h2>
+      <p className="text-sm text-pretty text-muted-foreground">
+        The full report lists every finding with its fix. With an account you
+        can also verify domains you own and run deeper checks.
+      </p>
+      {/* Accounts arrive in Phase 2, and a link now would lead nowhere. */}
+      <Button disabled>Sign up for the full report</Button>
+      <p className="text-xs text-muted-foreground">Accounts are coming soon.</p>
+    </section>
+  );
+}
+
+export function ScanResults({ scan }: { scan: Scan }) {
+  const shown = scan.findings.length;
+  const hidden = scan.total_findings - shown;
+
+  return (
+    <div className="flex animate-in flex-col gap-10 duration-300 fade-in">
+      <ScoreSummary scan={scan} />
+
+      {shown > 0 && (
+        <section
+          aria-labelledby="findings-heading"
+          className="flex flex-col gap-4"
+        >
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <h2
+              id="findings-heading"
+              className="text-lg font-semibold tracking-tight"
+            >
+              Findings
+            </h2>
+            {hidden > 0 && (
+              <p className="text-sm text-muted-foreground">
+                Showing the top {shown} of {scan.total_findings}
+              </p>
+            )}
+          </div>
+          <FindingGroups findings={scan.findings} />
+        </section>
+      )}
+
+      {scan.teaser && <SignupTeaser hidden={hidden} />}
+    </div>
+  );
+}

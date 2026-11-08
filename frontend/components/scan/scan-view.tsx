@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { ScanLog } from "@/components/scan/scan-log";
+import { ScanResults } from "@/components/scan/scan-results";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useStartScan } from "@/hooks/use-start-scan";
 import { ApiError, getScan, type Scan } from "@/lib/api";
@@ -157,7 +158,7 @@ export function ScanView({ id }: { id: string }) {
 
   if (scan.status === "failed") return <ScanFailed target={scan.target} />;
 
-  return <p>Score: {scan.score ?? "none"}</p>;
+  return <ScanResults scan={scan} />;
 }
 
 export function ScanLoading() {
