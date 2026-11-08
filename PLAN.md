@@ -106,7 +106,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - **repos**: id, owner_id, installation_id, full_name, is_private, created_at
 - **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, target, mode (quick|full), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, grade_cap_reason, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
 - **findings**: id, scan_id, check_id, category, severity (critical|high|medium|low|info), title, evidence_masked, location, linked_finding_id, created_at
-- **scan_claims**: id, scan_id, token_hash, created_at (one per anonymous request, redeemed after signup in Phase 2)
+- **scan_claims**: id, scan_id, token_hash, created_at, claimed_by, claimed_at (one per anonymous request, redeemed after signup. A redeemed row grants that user the full report, since scans within the reuse window are shared)
 - **notification_settings**: owner_id, email_enabled, telegram_chat_id, min_severity
 - Check text (what it means / fixes per platform) lives in code, keyed by `check_id`.
 
@@ -115,7 +115,8 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 |---|---|---|
 | GET | /api/health | |
 | POST | /api/scans/quick | anonymous, 5/min per IP, passive checks only. Returns a scan of the same hostname from the last 10 minutes instead of starting one, max 20 new scans per hostname per hour. Returns a `claim_token` to anonymous callers |
-| GET | /api/scans/{id} | status + progress + score + findings (top 3 unless the viewer owns the scan) |
+| POST | /api/scans/claim | auth, 20/min per IP. Redeems up to 20 claim tokens for the signed-in user |
+| GET | /api/scans/{id} | status + progress + score + findings (top 3 unless the viewer owns the scan or holds a redeemed claim) |
 | GET | /api/domains | auth |
 | POST | /api/domains | returns TXT token |
 | POST | /api/domains/{id}/verify | DNS TXT lookup |

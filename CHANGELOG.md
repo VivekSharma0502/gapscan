@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-11-08: Phase 2, step 2a: Supabase Auth
+
+**Added**
+- Sign-in with GitHub or an email magic link: a `/login` page, an `/auth/callback` page and a header user menu with sign out. Supabase handles Auth only, and app data stays in local Postgres.
+- The API verifies Supabase access tokens against the project's public keys. Only ES256 and RS256 are accepted, so unsigned tokens and algorithm confusion are refused, and the backend holds no Supabase secret. A legacy HS256 project is not supported and must rotate to asymmetric signing keys.
+- A `profiles` table, created from the verified token on write routes so that polling a scan stays read-only.
+- `POST /api/scans/claim`, which attaches anonymous scans to the signed-in user. Signing up now redeems the tokens saved in the browser and opens the full report.
+- New dependencies: `PyJWT[crypto]` and `@supabase/supabase-js`.
+- `profiles`, `scan_claims.claimed_by` and `claimed_at`, and a foreign key on `scans.owner_id`. Run `alembic upgrade head`, and add the new values from `.env.example`.
+
+**Changed**
+- Signing keys are fetched through `safe_http`, not PyJWT's own client, so the SSRF rule has no exception. Keys are refreshed every 10 minutes, and forged key ids can't force repeated fetches.
+- The full report now goes to the owner and to anyone holding a redeemed claim, because scans of one site within 10 minutes share a row and each visitor's token must still work.
+- A signed-in user who gets a recently scanned site back now receives the full report. They would otherwise be stuck on the teaser for a scan they had just asked for.
+- A token that fails verification returns 401 rather than being treated as anonymous, and the 503 for unreachable signing keys works the same way, so a broken session is never mistaken for a logged-out one.
+
 ## 2026-11-08: Grade caps
 
 **Changed**

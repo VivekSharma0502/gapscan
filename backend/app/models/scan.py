@@ -64,8 +64,14 @@ class Scan(SQLModel, table=True):
 
     # Security: a random UUID, because anyone holding the id can read the scan's teaser.
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    # No foreign keys yet: profiles, domains and repos arrive in Phases 2 and 3.
-    owner_id: UUID | None = Field(default=None, index=True)
+    # Null means nobody has claimed this anonymous scan yet. Others who scanned the same site
+    # can also hold a redeemed ScanClaim for it. Domains and repos arrive in later steps.
+    owner_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid, ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True, index=True
+        ),
+    )
     domain_id: UUID | None = None
     repo_id: UUID | None = None
     target_type: TargetType = Field(sa_column=_enum_column(TargetType))
@@ -133,3 +139,10 @@ class ScanClaim(SQLModel, table=True):
     # Security: only the hash is stored, so a database leak can't be used to claim scans.
     token_hash: str = Field(max_length=64, unique=True)
     created_at: datetime = Field(default_factory=utc_now, sa_column=_timestamp_column())
+    # Set once redeemed. This row is then what lets that user read the full report, which
+    # is how several people can hold a report for one shared scan.
+    claimed_by: UUID | None = Field(
+        default=None,
+        sa_column=Column(Uuid, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=True),
+    )
+    claimed_at: datetime | None = Field(default=None, sa_column=_timestamp_column(nullable=True))

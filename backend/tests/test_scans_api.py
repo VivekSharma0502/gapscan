@@ -15,9 +15,10 @@ from app.api import scans as scans_api
 from app.checks.base import Category, Severity
 from app.checks.catalog import CATALOG
 from app.checks.runner import ScanStatus
-from app.core.auth import get_viewer_id
+from app.core.auth import Viewer, get_viewer
 from app.core.rate_limit import limiter
 from app.main import app
+from app.models.profile import Profile
 from app.models.scan import (
     FindingRecord,
     Scan,
@@ -56,6 +57,11 @@ def client(db_engine: Engine, queue: FakeQueue) -> Iterator[TestClient]:
     yield TestClient(app)
     limiter.reset()
     app.dependency_overrides.clear()
+
+
+def sign_in(viewer_id: UUID) -> None:
+    viewer = Viewer(id=viewer_id, email="person@example.com", name=None)
+    app.dependency_overrides[get_viewer] = lambda: viewer
 
 
 def add_scan(engine: Engine, age_minutes: float = 0, **overrides: Any) -> UUID:
@@ -218,7 +224,7 @@ def test_signed_in_viewer_owns_the_scan_and_gets_no_token(
     client: TestClient, db_engine: Engine
 ) -> None:
     viewer = uuid4()
-    app.dependency_overrides[get_viewer_id] = lambda: viewer
+    sign_in(viewer)
 
     body = post(client).json()
 
@@ -383,7 +389,7 @@ def test_owner_gets_every_finding(client: TestClient, db_engine: Engine) -> None
     )
     for check_id in CHECK_IDS[:5]:
         add_finding(db_engine, scan_id, check_id, Severity.LOW)
-    app.dependency_overrides[get_viewer_id] = lambda: viewer
+    sign_in(viewer)
 
     body = client.get(f"/api/scans/{scan_id}").json()
 
@@ -396,7 +402,7 @@ def test_signed_in_stranger_gets_only_the_teaser(client: TestClient, db_engine: 
     scan_id = add_scan(db_engine, owner_id=uuid4())
     for check_id in CHECK_IDS[:5]:
         add_finding(db_engine, scan_id, check_id, Severity.LOW)
-    app.dependency_overrides[get_viewer_id] = uuid4
+    sign_in(uuid4())
 
     body = client.get(f"/api/scans/{scan_id}").json()
 
@@ -513,7 +519,219 @@ def test_malformed_scan_id_is_rejected(client: TestClient) -> None:
     assert client.get("/api/scans/not-a-uuid").status_code == 422
 
 
+# Claiming anonymous scans
+
+
+def claim(client: TestClient, *tokens: str) -> Any:
+    return client.post("/api/scans/claim", json={"tokens": list(tokens)})
+
+
+def anonymous_scan(client: TestClient) -> tuple[str, str]:
+    body = post(client).json()
+    return body["id"], body["claim_token"]
+
+
+def add_five_findings(engine: Engine, scan_id: str) -> None:
+    for check_id in CHECK_IDS[:5]:
+        add_finding(engine, UUID(scan_id), check_id, Severity.LOW)
+
+
+def sign_out() -> None:
+    app.dependency_overrides.pop(get_viewer, None)
+
+
+def test_claim_requires_signing_in(client: TestClient, db_engine: Engine) -> None:
+    _, token = anonymous_scan(client)
+
+    result = claim(client, token)
+
+    assert result.status_code == 401
+    assert claims(db_engine)[0].claimed_by is None
+
+
+def test_claiming_unlocks_the_full_report_and_makes_an_owner(
+    client: TestClient, db_engine: Engine
+) -> None:
+    scan_id, token = anonymous_scan(client)
+    add_five_findings(db_engine, scan_id)
+    viewer = uuid4()
+    sign_in(viewer)
+
+    result = claim(client, token)
+
+    assert result.status_code == 200
+    assert result.json() == {"claimed": [scan_id]}
+    assert load(db_engine, scan_id).owner_id == viewer
+    body = client.get(f"/api/scans/{scan_id}").json()
+    assert body["teaser"] is False
+    assert len(body["findings"]) == 5
+
+
+def test_claiming_creates_the_profile(client: TestClient, db_engine: Engine) -> None:
+    _, token = anonymous_scan(client)
+    viewer = uuid4()
+    sign_in(viewer)
+
+    claim(client, token)
+
+    with Session(db_engine) as session:
+        assert session.get_one(Profile, viewer).email == "person@example.com"
+
+
+def test_a_token_only_works_for_the_first_user(client: TestClient, db_engine: Engine) -> None:
+    scan_id, token = anonymous_scan(client)
+    add_five_findings(db_engine, scan_id)
+    first = uuid4()
+    sign_in(first)
+    claim(client, token)
+    sign_in(uuid4())
+
+    assert claim(client, token).json() == {"claimed": []}
+    assert client.get(f"/api/scans/{scan_id}").json()["teaser"] is True
+    assert load(db_engine, scan_id).owner_id == first
+
+
+def test_retrying_a_claim_is_safe(client: TestClient, db_engine: Engine) -> None:
+    scan_id, token = anonymous_scan(client)
+    viewer = uuid4()
+    sign_in(viewer)
+    claim(client, token)
+
+    assert claim(client, token).json() == {"claimed": [scan_id]}
+    assert load(db_engine, scan_id).owner_id == viewer
+
+
+def test_two_people_can_claim_one_shared_scan(client: TestClient, db_engine: Engine) -> None:
+    first_scan, first_token = anonymous_scan(client)
+    second_scan, second_token = anonymous_scan(client)
+    assert first_scan == second_scan
+    add_five_findings(db_engine, first_scan)
+    first, second = uuid4(), uuid4()
+    sign_in(first)
+    claim(client, first_token)
+    sign_in(second)
+
+    assert claim(client, second_token).json() == {"claimed": [first_scan]}
+
+    assert client.get(f"/api/scans/{first_scan}").json()["teaser"] is False
+    assert load(db_engine, first_scan).owner_id == first
+
+
+def test_unknown_tokens_are_ignored_alongside_real_ones(
+    client: TestClient, db_engine: Engine
+) -> None:
+    scan_id, token = anonymous_scan(client)
+    sign_in(uuid4())
+
+    assert claim(client, "made-up", token).json() == {"claimed": [scan_id]}
+    assert len(claims(db_engine)) == 1
+
+
+def test_a_claim_is_not_readable_while_signed_out(client: TestClient, db_engine: Engine) -> None:
+    scan_id, token = anonymous_scan(client)
+    add_five_findings(db_engine, scan_id)
+    sign_in(uuid4())
+    claim(client, token)
+    sign_out()
+
+    assert client.get(f"/api/scans/{scan_id}").json()["teaser"] is True
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"tokens": []},
+        {"tokens": ["x"] * 21},
+        {"tokens": ["x" * 129]},
+        {"tokens": [""]},
+        {"tokens": ["x"], "scan_id": "y"},
+    ],
+    ids=["empty", "too-many", "too-long", "blank", "extra-field"],
+)
+def test_bad_claim_requests_are_rejected(client: TestClient, payload: dict[str, Any]) -> None:
+    sign_in(uuid4())
+
+    assert client.post("/api/scans/claim", json=payload).status_code == 422
+
+
+# Signed-in viewers and reused scans
+
+
+def test_signed_in_viewer_gets_the_full_report_on_a_reused_scan(
+    client: TestClient, db_engine: Engine
+) -> None:
+    scan_id, _ = anonymous_scan(client)
+    add_five_findings(db_engine, scan_id)
+    viewer = uuid4()
+    sign_in(viewer)
+
+    body = post(client).json()
+
+    assert (body["id"], body["reused"], body["claim_token"]) == (scan_id, True, None)
+    assert client.get(f"/api/scans/{scan_id}").json()["teaser"] is False
+    assert load(db_engine, scan_id).owner_id == viewer
+
+
+def test_reusing_someone_elses_scan_does_not_take_it_over(
+    client: TestClient, db_engine: Engine
+) -> None:
+    owner = uuid4()
+    scan_id = add_scan(db_engine, owner_id=owner)
+    add_five_findings(db_engine, str(scan_id))
+    sign_in(uuid4())
+
+    post(client)
+
+    assert load(db_engine, scan_id).owner_id == owner
+    assert client.get(f"/api/scans/{scan_id}").json()["teaser"] is False
+
+
+def test_repeated_reuse_records_access_once(client: TestClient, db_engine: Engine) -> None:
+    add_scan(db_engine, owner_id=uuid4())
+    sign_in(uuid4())
+
+    post(client)
+    post(client)
+
+    assert len(claims(db_engine)) == 1
+
+
+def test_owner_reusing_their_scan_records_nothing(client: TestClient, db_engine: Engine) -> None:
+    viewer = uuid4()
+    add_scan(db_engine, owner_id=viewer)
+    sign_in(viewer)
+
+    post(client)
+
+    assert claims(db_engine) == []
+
+
+def test_starting_a_scan_signed_in_creates_the_profile(
+    client: TestClient, db_engine: Engine
+) -> None:
+    viewer = uuid4()
+    sign_in(viewer)
+
+    post(client)
+
+    with Session(db_engine) as session:
+        assert session.get(Profile, viewer) is not None
+
+
 # CORS
+
+
+def test_cors_allows_the_bearer_token(client: TestClient) -> None:
+    result = client.options(
+        "/api/scans/claim",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert result.status_code == 200
+    assert "authorization" in result.headers["access-control-allow-headers"].lower()
 
 
 def test_cors_allows_the_frontend_to_post_json(client: TestClient) -> None:

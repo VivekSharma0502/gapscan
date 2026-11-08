@@ -11,3 +11,5 @@ alembic==1.20.1
 psycopg[binary]==3.3.8
 celery[redis]==5.7.0
 slowapi==0.1.10
+# Verifies Supabase JWT signatures. Keys are fetched through core/safe_http.py, not PyJWT's own client.
+PyJWT[crypto]==2.15.1

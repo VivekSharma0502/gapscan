@@ -1,5 +1,7 @@
 // Typed client for the scan API. Types mirror backend/app/api/scans.py.
 
+import { getAccessToken, signOut } from "@/lib/supabase";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const TIMEOUT_MS = 15_000;
 const UNREACHABLE_MESSAGE =
@@ -96,17 +98,20 @@ function errorMessage(status: number, body: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
-async function request<T>(
+async function send(
   path: string,
-  init: RequestInit & { signal?: AbortSignal } = {},
-): Promise<T> {
+  init: RequestInit,
+  token: string | null,
+): Promise<Response> {
   const timeout = AbortSignal.timeout(TIMEOUT_MS);
   const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  const headers = new Headers(init.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  let response: Response;
   try {
-    response = await fetch(`${API_URL}${path}`, {
+    return await fetch(`${API_URL}${path}`, {
       ...init,
+      headers,
       signal,
       cache: "no-store",
     });
@@ -114,6 +119,19 @@ async function request<T>(
     // The caller cancelled, so this isn't a failure to report.
     if (init.signal?.aborted) throw error;
     throw new ApiError(UNREACHABLE_MESSAGE, 0);
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = await getAccessToken();
+  let response = await send(path, init, token);
+
+  // Supabase refreshes tokens before they expire, so a refusal means this session is
+  // really dead. End it and carry on as a visitor. The API refuses before doing any
+  // work, so sending the request again can't start a second scan.
+  if (response.status === 401 && token) {
+    await signOut();
+    response = await send(path, init, null);
   }
 
   const body: unknown = await response.json().catch(() => null);
@@ -128,6 +146,14 @@ export function startQuickScan(target: string): Promise<QuickScanCreated> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ target }),
+  });
+}
+
+export function claimScans(tokens: string[]): Promise<{ claimed: string[] }> {
+  return request("/api/scans/claim", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tokens }),
   });
 }
 

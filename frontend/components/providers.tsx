@@ -3,6 +3,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { AuthProvider } from "@/components/auth/auth-provider";
+
 export function Providers({ children }: { children: React.ReactNode }) {
   // Created in state so each browser session gets one client, and a server render
   // never shares one between visitors.
@@ -13,5 +15,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
       }),
   );
 
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={client}>
+      <AuthProvider>{children}</AuthProvider>
+    </QueryClientProvider>
+  );
 }

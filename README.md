@@ -26,6 +26,7 @@ Commands are for Windows PowerShell, run from the repo root.
 # 1. Env files (never commit the copies)
 Copy-Item .env.example .env
 "NEXT_PUBLIC_API_URL=http://localhost:8000" | Out-File -Encoding ascii frontend/.env.local
+# Then add the Supabase values: see "Sign-in setup" below.
 
 # 2. Redis and Postgres
 docker compose up -d redis postgres
@@ -46,6 +47,19 @@ npm --prefix frontend install
 After pulling changes that add a migration, run `alembic upgrade head` again. To create one after changing a model, run `.venv/Scripts/python.exe -m alembic revision --autogenerate -m "describe the change"` from `backend/` and review the generated file.
 
 Scan DNS lookups fall back automatically from UDP to TCP, DNS-over-HTTPS and then the operating system. If your network blocks UDP DNS, set `SCANNER_DNS_SERVERS=1.1.1.1,8.8.8.8` and a lower `SCANNER_DNS_TIMEOUT_SECONDS` in `.env` to reach the working fallback sooner.
+
+## Sign-in setup
+
+Supabase is used for Auth only. App data stays in the local Postgres. Scanning works without this, but sign-in stays off.
+
+1. Open `https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json`. `keys` must not be empty. ScanKit only accepts asymmetric signing keys, so a project on the legacy HS256 secret has to rotate to one first.
+2. In Supabase, go to Authentication → Sign In / Providers → GitHub and copy the Callback URL.
+3. At <https://github.com/settings/developers>, create an OAuth App with homepage `http://localhost:3000` and that callback URL.
+4. Paste its Client ID and a new Client Secret into the same Supabase panel, enable GitHub and save. These two values go nowhere else.
+5. In Authentication → URL Configuration, set Site URL to `http://localhost:3000` and add `http://localhost:3000/auth/callback` to Redirect URLs.
+6. Add `SUPABASE_URL` to `.env`, and `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `frontend/.env.local`. See `.env.example`. Restart both dev servers.
+
+The backend needs no Supabase secret. Don't add the service role key or the JWT secret to either file. Magic links must be opened in the browser that requested them.
 
 ## Run
 

@@ -1,12 +1,15 @@
 "use client";
 
 import { TriangleAlert } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 
+import { useAuth } from "@/components/auth/auth-provider";
 import { FindingCard } from "@/components/scan/finding-card";
 import { ScoreGauge } from "@/components/scan/score-gauge";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { useStartScan } from "@/hooks/use-start-scan";
 import type { Finding, Platform, Scan } from "@/lib/api";
 import { SEVERITIES, SEVERITY_STYLES } from "@/lib/severity";
 import { cn } from "@/lib/utils";
@@ -124,9 +127,22 @@ function FindingGroups({ findings }: { findings: Finding[] }) {
   );
 }
 
-function SignupTeaser({ hidden, noun }: { hidden: number; noun: string }) {
+const teaserPanel =
+  "flex flex-col items-start gap-3 rounded-xl bg-card p-6 ring-1 ring-foreground/10";
+
+function SignupTeaser({
+  scanId,
+  hidden,
+  noun,
+}: {
+  scanId: string;
+  hidden: number;
+  noun: string;
+}) {
+  const next = encodeURIComponent(`/scan/${scanId}`);
+
   return (
-    <section className="flex flex-col items-start gap-3 rounded-xl bg-card p-6 ring-1 ring-foreground/10">
+    <section className={teaserPanel}>
       <h2 className="text-lg font-semibold tracking-tight">
         {hidden > 0
           ? `Sign up to see the other ${counted(hidden, noun)}`
@@ -136,9 +152,36 @@ function SignupTeaser({ hidden, noun }: { hidden: number; noun: string }) {
         The full report lists every finding with its fix. With an account you
         can also verify domains you own and run deeper checks.
       </p>
-      {/* Accounts arrive in Phase 2, and a link now would lead nowhere. */}
-      <Button disabled>Sign up for the full report</Button>
-      <p className="text-xs text-muted-foreground">Accounts are coming soon.</p>
+      <Link href={`/login?next=${next}`} className={buttonVariants()}>
+        Sign up for the full report
+      </Link>
+    </section>
+  );
+}
+
+// For someone signed in who opened another person's scan link. Scanning the site themselves
+// gets them their own report.
+function ScanItYourself({ target }: { target: string }) {
+  const startScan = useStartScan();
+  const busy = startScan.isPending;
+
+  return (
+    <section className={teaserPanel}>
+      <h2 className="text-lg font-semibold tracking-tight">
+        This report belongs to someone else
+      </h2>
+      <p className="text-sm text-pretty text-muted-foreground">
+        Scan {target} yourself to get the full report with every finding and
+        its fix.
+      </p>
+      <Button onClick={() => startScan.mutate(target)} disabled={busy}>
+        {busy ? "Starting…" : "Scan this site"}
+      </Button>
+      {startScan.error && (
+        <p role="alert" className="text-sm text-destructive">
+          {startScan.error.message}
+        </p>
+      )}
     </section>
   );
 }
@@ -146,6 +189,7 @@ function SignupTeaser({ hidden, noun }: { hidden: number; noun: string }) {
 export function ScanResults({ scan }: { scan: Scan }) {
   const shown = scan.findings.length;
   const hidden = scan.total_findings - shown;
+  const { user } = useAuth();
 
   return (
     <div className="flex animate-in flex-col gap-10 duration-300 fade-in">
@@ -173,12 +217,16 @@ export function ScanResults({ scan }: { scan: Scan }) {
         </section>
       )}
 
-      {scan.teaser && (
-        <SignupTeaser
-          hidden={hidden}
-          noun={hasOnlyNotes(scan) ? "note" : "issue"}
-        />
-      )}
+      {scan.teaser &&
+        (user ? (
+          <ScanItYourself target={scan.target} />
+        ) : (
+          <SignupTeaser
+            scanId={scan.id}
+            hidden={hidden}
+            noun={hasOnlyNotes(scan) ? "note" : "issue"}
+          />
+        ))}
     </div>
   );
 }

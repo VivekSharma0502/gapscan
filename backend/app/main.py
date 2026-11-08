@@ -31,7 +31,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    # Security: sign-in uses this bearer header, not cookies, so allow_credentials stays off
+    # and another site can't ride on a visitor's session.
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 app.include_router(health_router)

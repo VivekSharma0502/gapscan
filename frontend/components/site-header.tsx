@@ -1,6 +1,8 @@
 import { ShieldCheck } from "lucide-react";
 import Link from "next/link";
+import { Suspense } from "react";
 
+import { UserMenu } from "@/components/auth/user-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 export function SiteHeader() {
@@ -14,7 +16,13 @@ export function SiteHeader() {
           <ShieldCheck className="size-4" aria-hidden />
           ScanKit
         </Link>
-        <ThemeToggle />
+        <div className="flex items-center gap-1">
+          {/* The menu reads the path, which on a scan page is only known per request. */}
+          <Suspense>
+            <UserMenu />
+          </Suspense>
+          <ThemeToggle />
+        </div>
       </div>
     </header>
   );

@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     # Where rate limit counters live. Empty means Redis, so limits hold across API processes.
     rate_limit_storage_url: str | None = None
 
+    # The Supabase project URL, e.g. https://abcd.supabase.co. Tokens are verified against
+    # its public keys. Empty means sign-in is off and any token is refused with a 503.
+    supabase_url: str = ""
+
+    @field_validator("supabase_url")
+    @classmethod
+    def strip_trailing_slash(cls, value: str) -> str:
+        # The token issuer is compared exactly, so a pasted trailing slash would reject all.
+        return value.strip().rstrip("/")
+
     @field_validator("cors_origins", "scanner_dns_servers", mode="before")
     @classmethod
     def split_comma_list(cls, value: object) -> object:
