@@ -86,6 +86,25 @@ TEXT: dict[str, CheckText] = {
             ),
         ),
     ),
+    "baas.scripts_unread": CheckText(
+        title="Some of your website's scripts couldn't be read",
+        fix=Fix(
+            what_it_means=(
+                "GapScan looks through your site's scripts for Firebase and Supabase settings. "
+                "It couldn't read every script, so it can't say whether your site uses those "
+                "services, and a key in an unread script would have been missed."
+            ),
+            how_to_fix=(
+                "The list above says why each script was skipped. If it says bot protection "
+                "blocked it, GapScan won't try to get past that, because it's your site's choice. "
+                "To let scans through, add a rule in your host's firewall that allows requests "
+                "whose user agent contains GapScanBot, such as a Bypass rule in the Vercel "
+                "Firewall, then scan again. A user agent can be faked, so remove the rule when "
+                "you're done if you don't scan regularly."
+            ),
+            backend=BackendFix(label="GapScan"),
+        ),
+    ),
     "baas.backends_found": CheckText(
         title="Backends found in your website's code",
         fix=Fix(

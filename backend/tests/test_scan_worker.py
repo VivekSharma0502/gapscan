@@ -719,3 +719,28 @@ def test_no_probes_without_proven_ownership(
     run_full_scan(str(scan_id))
 
     assert load(db_engine, scan_id).status is ScanJobStatus.DONE
+
+
+@pytest.mark.usefixtures("collected")
+def test_scripts_are_read_before_any_sensitive_path_is_requested(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: the burst of probes set off Vercel's checkpoint, which then blocked app.js.
+    proof(monkeypatch, PROVEN)
+    calls: list[str] = []
+
+    def discover(ctx: ScanContext) -> ScanContext:
+        calls.append("scripts")
+        return ctx
+
+    def attach(ctx: ScanContext) -> ScanContext:
+        calls.append("probes")
+        return ctx
+
+    monkeypatch.setattr(tasks, "discover_backends", discover)
+    monkeypatch.setattr(tasks, "attach_probes", attach)
+    owner = uuid4()
+
+    run_full_scan(str(add_full(db_engine, owner, add_domain(db_engine, owner))))
+
+    assert calls == ["scripts", "probes"]

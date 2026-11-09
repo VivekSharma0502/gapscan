@@ -46,6 +46,7 @@ const STEP_LABELS: Record<string, string> = {
 
   "baas.supabase_service_key": "Supabase keys in scripts",
   "baas.backends_found": "Backends used by the site",
+  "baas.scripts_unread": "Scripts that couldn't be read",
   "baas.firebase_rtdb_public": "Firebase database rules",
   "baas.firebase_storage_listable": "Firebase storage rules",
 

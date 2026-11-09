@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3b fix: bot protection and skipped scripts
+
+**Fixed**
+- A real site on Vercel reported "Read 0 of 1 scripts". The script's request got Vercel's Security Checkpoint (403, `x-vercel-mitigated`), and any non-200 answer was dropped without a reason. Parsing wasn't at fault: the same script finds both Firebase backends when read directly.
+- Scripts are now read before the requests for sensitive paths, because that burst can set off bot protection and block ordinary requests too.
+- A Vercel challenge no longer counts as a real answer for the exposure checks, matching what Cloudflare challenges already did. Those checks could previously pass on a challenge page, so a scan could read as complete when it wasn't. Affected checks now show as skipped.
+- A challenged homepage no longer reads as "nothing found".
+
+**Added**
+- Findings now say why each script wasn't fully read, such as bot protection, too large, HTTP 404 or a script limit.
+- `baas.scripts_unread` has its own explanation for when nothing was found but not every script was read. `baas.backends_found` now only appears when backends were found.
+- Regression tests with a fixture matching this site: CDN scripts on other hosts, one relative script holding the config, and a checkpoint response. Inline `<script>` blocks are covered too.
+
+**Security**
+- Once bot protection challenges a scan, the scanner stops sending requests to that site. It doesn't try to get past it, since that's the owner's choice. The report explains how an owner can allow scans with a firewall rule.
+
 ## 2026-11-10: Phase 3, step 3b-3: Firebase probes
 
 **Added**

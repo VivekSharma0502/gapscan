@@ -380,12 +380,14 @@ def run_full_scan(scan_id: str) -> None:
         on_step(OWNERSHIP_STEP)
         problem = _ownership_problem(job_id)
         context = collect_context(target, on_step=on_step)
-        on_step(PROBE_STEP)
-        context = without_probes(context, problem) if problem else attach_probes(context)
+        # Scripts come first. A burst of requests for sensitive paths can set off a site's
+        # bot protection, which would then block the ordinary script requests too.
         on_step(BAAS_STEP)
         if not problem:
             context = discover_backends(context)
             _remember_backends(job_id, context.baas)
+        on_step(PROBE_STEP)
+        context = without_probes(context, problem) if problem else attach_probes(context)
         on_step(BAAS_PROBE_STEP)
         if not problem:
             context = probe_backends(context, _confirmed_backends(job_id))

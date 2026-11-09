@@ -156,6 +156,12 @@ class ExposedServiceKey:
 
 
 @dataclass(frozen=True)
+class SkippedScript:
+    path: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class BaasDiscovery:
     backends: tuple[DiscoveredBackend, ...]
     exposed_keys: tuple[ExposedServiceKey, ...]
@@ -163,6 +169,8 @@ class BaasDiscovery:
     scripts_read: int
     # Couldn't be answered, so a key in them can't be ruled out.
     scripts_failed: int
+    # Each script not fully read, and why, so a report can say what wasn't covered.
+    skipped: tuple[SkippedScript, ...] = ()
 
 
 @dataclass(frozen=True)

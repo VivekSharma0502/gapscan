@@ -216,3 +216,24 @@ def test_source_map_probes_are_added_to_the_fixed_ones(fake_get: FakeGet) -> Non
     attach_probes(site(b'<script src="/app.js"></script>'))
 
     assert "https://example.com/app.js.map" in fake_get.urls
+
+
+@pytest.mark.parametrize("header", ["cf-mitigated", "x-vercel-mitigated"])
+def test_bot_challenge_stops_the_remaining_requests(fake_get: FakeGet, header: str) -> None:
+    fake_get.default = response(status=403, headers={header: "challenge"})
+
+    probes = attach_probes(site()).probes
+
+    assert len(fake_get.urls) == 1
+    assert probes is not None
+    assert set(probes) == set(FIXED_PROBE_PATHS)
+    assert all(probe.status_code is None for probe in probes.values())
+
+
+def test_a_vercel_challenge_never_counts_as_file_not_found(fake_get: FakeGet) -> None:
+    fake_get.default = response(status=403, headers={"x-vercel-mitigated": "challenge"})
+
+    probes = attach_probes(site()).probes
+
+    assert probes is not None
+    assert probes["/.env"].status_code is None

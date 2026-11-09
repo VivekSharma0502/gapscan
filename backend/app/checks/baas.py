@@ -37,7 +37,13 @@ def _discovery(ctx: ScanContext) -> BaasDiscovery:
 
 
 def _coverage(baas: BaasDiscovery) -> str:
-    return f"Read {baas.scripts_read} of {baas.scripts_total} scripts."
+    summary = f"Read {baas.scripts_read} of {baas.scripts_total} scripts."
+    if not baas.skipped:
+        return summary
+    shown = "; ".join(f"{item.path} ({item.reason})" for item in baas.skipped[:MAX_LOCATIONS])
+    hidden = len(baas.skipped) - MAX_LOCATIONS
+    more = f"; and {hidden} more" if hidden > 0 else ""
+    return f"{summary} Skipped: {shown}{more}."
 
 
 @check("baas.supabase_service_key", Category.BAAS, requires=[Input.BAAS], active=True)
@@ -63,11 +69,19 @@ def _describe(backend: DiscoveredBackend) -> str:
 @check("baas.backends_found", Category.BAAS, requires=[Input.BAAS], active=True)
 def backends_found(ctx: ScanContext) -> Finding | None:
     baas = _discovery(ctx)
-    if not baas.backends and baas.scripts_read == baas.scripts_total:
+    if not baas.backends:
         return None
     names = "; ".join(_describe(item) for item in baas.backends)
-    summary = names if names else "No Firebase or Supabase backends found."
-    return make_finding("baas.backends_found", Severity.INFO, f"{summary} {_coverage(baas)}")
+    return make_finding("baas.backends_found", Severity.INFO, f"{names}. {_coverage(baas)}")
+
+
+@check("baas.scripts_unread", Category.BAAS, requires=[Input.BAAS], active=True)
+def scripts_unread(ctx: ScanContext) -> Finding | None:
+    """Say so when nothing was found but not everything could be read."""
+    baas = _discovery(ctx)
+    if baas.backends or not baas.skipped:
+        return None
+    return make_finding("baas.scripts_unread", Severity.INFO, _coverage(baas))
 
 
 def _probes(ctx: ScanContext) -> BaasProbes:

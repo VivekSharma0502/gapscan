@@ -9,7 +9,7 @@ import pytest
 
 from app.checks import baas_collector
 from app.checks.active_collector import allowed_probe_hosts, without_probes
-from app.checks.baas import backends_found, supabase_service_key
+from app.checks.baas import backends_found, scripts_unread, supabase_service_key
 from app.checks.baas_collector import (
     BUNDLE_MAX_BYTES,
     MAX_BACKENDS,
@@ -33,6 +33,7 @@ from app.checks.base import (
     ScanContext,
     Severity,
     SkipCheck,
+    SkippedScript,
 )
 from app.checks.catalog import CATALOG
 from app.checks.runner import run_checks, selected_checks
@@ -435,11 +436,51 @@ def test_nothing_found_with_every_script_read_says_nothing() -> None:
     assert backends_found(baas()) is None
 
 
-def test_partial_coverage_is_reported_even_with_no_backends() -> None:
-    finding = backends_found(baas(scripts_total=30, scripts_read=20))
+def test_no_backends_found_is_never_described_as_backends_found() -> None:
+    skipped = (SkippedScript("/app.js", "blocked by the site's bot protection"),)
+
+    assert backends_found(baas(scripts_read=0, scripts_total=1, skipped=skipped)) is None
+
+
+def test_unread_scripts_get_their_own_explanation() -> None:
+    skipped = (SkippedScript("/app.js", "blocked by the site's bot protection"),)
+
+    finding = scripts_unread(baas(scripts_read=0, scripts_total=1, skipped=skipped))
 
     assert finding is not None
-    assert "Read 20 of 30" in finding.evidence
+    assert finding.severity is Severity.INFO
+    assert "Read 0 of 1 scripts." in finding.evidence
+    assert "/app.js (blocked by the site's bot protection)" in finding.evidence
+    assert "couldn't read every script" in finding.fix.what_it_means
+    assert "found in your" not in finding.title
+
+
+def test_every_script_read_and_nothing_found_says_nothing() -> None:
+    assert scripts_unread(baas()) is None
+
+
+def test_scripts_unread_is_silent_when_backends_were_found() -> None:
+    skipped = (SkippedScript("/a.js", "HTTP 404"),)
+
+    assert scripts_unread(baas(backends=(RTDB,), skipped=skipped)) is None
+
+
+def test_backends_found_still_says_what_was_skipped() -> None:
+    skipped = (SkippedScript("/a.js", "too large, only the first 1 MB was read"),)
+
+    finding = backends_found(baas(backends=(RTDB,), skipped=skipped))
+
+    assert finding is not None
+    assert "/a.js (too large" in finding.evidence
+
+
+def test_long_skip_lists_are_shortened() -> None:
+    skipped = tuple(SkippedScript(f"/{index}.js", "HTTP 404") for index in range(8))
+
+    finding = scripts_unread(baas(scripts_read=0, scripts_total=8, skipped=skipped))
+
+    assert finding is not None
+    assert "and 3 more" in finding.evidence
 
 
 # --- the gate ---
@@ -471,7 +512,9 @@ def test_scan_without_ownership_skips_them_with_the_reason() -> None:
 # --- fixes that don't depend on hosting ---
 
 
-@pytest.mark.parametrize("check_id", ["baas.supabase_service_key", "baas.backends_found"])
+@pytest.mark.parametrize(
+    "check_id", ["baas.supabase_service_key", "baas.backends_found", "baas.scripts_unread"]
+)
 def test_backend_fixes_need_no_hosting_tabs(check_id: str) -> None:
     fix = CATALOG[check_id].fix
 
@@ -485,3 +528,154 @@ def test_service_key_fix_links_the_official_docs() -> None:
 
     assert backend is not None
     assert backend.docs_url == "https://supabase.com/docs/guides/security/rotate-leaked-api-keys"
+
+
+# --- regression: a static site on Vercel behind its Security Checkpoint ---
+
+CHECKPOINT = response(
+    status=403,
+    headers={"x-vercel-mitigated": "challenge", "content-type": "text/html"},
+    body=b"<!DOCTYPE html><title>Vercel Security Checkpoint</title>",
+)
+STATIC_SITE_SCRIPT = f"""(() => {{
+  const firebaseConfig = {{
+    apiKey:            "{API_KEY}",
+    authDomain:        "demo-app.firebaseapp.com",
+    databaseURL:       "https://demo-app-default-rtdb.firebaseio.com",
+    projectId:         "demo-app",
+    storageBucket:     "demo-app.firebasestorage.app",
+  }};
+  firebase.initializeApp(firebaseConfig);
+}})();""".encode()
+DEMO_RTDB = DiscoveredBackend(BaasKind.FIREBASE_RTDB, "demo-app-default-rtdb.firebaseio.com")
+DEMO_BUCKET = DiscoveredBackend(BaasKind.FIREBASE_STORAGE, "demo-app.firebasestorage.app")
+
+
+def static_site() -> ScanContext:
+    # CDN scripts on other hosts, then one relative script holding the Firebase config.
+    return ScanContext(
+        hostname="example.com",
+        https=response(
+            url="https://example.com/",
+            body=b"""<html><head>
+            <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+            <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js">
+            </script></head><body><script src="app.js"></script></body></html>""",
+        ),
+    )
+
+
+def test_static_site_config_in_its_one_relative_script_is_found(fake_get: FakeGet) -> None:
+    fake_get.default = response(body=STATIC_SITE_SCRIPT)
+
+    result = discovered(static_site())
+
+    assert fake_get.urls == ["https://example.com/app.js"]
+    assert set(result.backends) == {DEMO_RTDB, DEMO_BUCKET}
+    assert (result.scripts_read, result.scripts_total, result.skipped) == (1, 1, ())
+
+
+def test_checkpoint_on_the_script_is_recorded_as_the_reason(fake_get: FakeGet) -> None:
+    fake_get.default = CHECKPOINT
+
+    result = discovered(static_site())
+
+    assert result.scripts_read == 0
+    assert result.scripts_failed == 1
+    assert result.skipped == (SkippedScript("/app.js", "blocked by the site's bot protection"),)
+
+
+def test_checkpoint_stops_the_remaining_script_requests(fake_get: FakeGet) -> None:
+    fake_get.default = CHECKPOINT
+
+    result = discovered(page("/a.js", "/b.js", "/c.js"))
+
+    assert fake_get.urls == ["https://example.com/a.js"]
+    assert result.scripts_failed == 3
+    assert "not requested" in result.skipped[1].reason
+
+
+def test_checkpoint_on_a_script_can_not_be_reported_clear(fake_get: FakeGet) -> None:
+    fake_get.default = CHECKPOINT
+    ctx = discover_backends(static_site())
+
+    with pytest.raises(SkipCheck, match="blocked by the site's bot protection"):
+        supabase_service_key(ctx)
+
+
+def test_checkpoint_on_the_homepage_is_not_reported_as_nothing_found(fake_get: FakeGet) -> None:
+    ctx = discover_backends(ScanContext(hostname="example.com", https=CHECKPOINT))
+
+    assert ctx.baas is None
+    assert fake_get.urls == []
+    assert "bot protection" in ctx.skip_reasons[Input.BAAS]
+    assert "bot protection" in ctx.skip_reasons[Input.BAAS_PROBES]
+
+
+def test_config_in_an_inline_script_block_is_found(fake_get: FakeGet) -> None:
+    result = discovered(page(inline=STATIC_SITE_SCRIPT.decode()))
+
+    assert set(result.backends) == {DEMO_RTDB, DEMO_BUCKET}
+    assert fake_get.urls == []
+
+
+def test_inline_config_is_found_even_when_a_script_is_blocked(fake_get: FakeGet) -> None:
+    fake_get.default = CHECKPOINT
+
+    result = discovered(page("/a.js", inline=STATIC_SITE_SCRIPT.decode()))
+
+    assert set(result.backends) == {DEMO_RTDB, DEMO_BUCKET}
+    assert result.scripts_read == 0
+
+
+@pytest.mark.parametrize(
+    ("answer", "reason", "counts_as_failed"),
+    [
+        (response(status=404), "HTTP 404", False),
+        (response(status=403), "refused (HTTP 403)", True),
+        (response(status=401), "refused (HTTP 401)", True),
+        (response(status=503), "refused (HTTP 503)", True),
+        (response(status=429), "refused (HTTP 429)", True),
+        (response(body=b"<!doctype html><p>app</p>"), "returned a web page, not a script", False),
+        (RequestFailedError("down"), "couldn't be fetched", True),
+        (OffHostRedirectError("left"), "redirected off the site", True),
+    ],
+)
+def test_each_skip_records_its_reason(
+    fake_get: FakeGet,
+    answer: SafeResponse | Exception,
+    reason: str,
+    counts_as_failed: bool,
+) -> None:
+    fake_get.default = answer
+
+    result = discovered(page("/a.js"))
+
+    assert result.skipped == (SkippedScript("/a.js", reason),)
+    assert result.scripts_failed == int(counts_as_failed)
+
+
+def test_too_large_script_is_read_and_noted(fake_get: FakeGet) -> None:
+    fake_get.default = SafeResponse(
+        "https://example.com/a.js",
+        200,
+        response().headers,
+        STATIC_SITE_SCRIPT,
+        truncated=True,
+        redirects=(),
+    )
+
+    result = discovered(page("/a.js"))
+
+    assert result.scripts_read == 1
+    assert set(result.backends) == {DEMO_RTDB, DEMO_BUCKET}
+    assert result.skipped == (SkippedScript("/a.js", "too large, only the first 1 MB was read"),)
+
+
+def test_limits_are_named_in_the_reason(fake_get: FakeGet) -> None:
+    scripts = [f"/{index}.js" for index in range(MAX_BUNDLE_SCRIPTS + 1)]
+
+    result = discovered(page(*scripts))
+
+    assert result.skipped[-1].reason == f"over the {MAX_BUNDLE_SCRIPTS}-script limit"
+    assert result.scripts_failed == 0
