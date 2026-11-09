@@ -2,18 +2,23 @@
 
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlmodel import update
+from sqlalchemy import delete
+from sqlmodel import select, update
 
 from app.checks.active_collector import attach_probes, without_probes
+from app.checks.base import Category
 from app.checks.collector import COLLECT_STEPS, collect_context
 from app.checks.ownership import prove_ownership
-from app.checks.runner import ScanReport, run_checks, selected_checks
+from app.checks.runner import ScanReport, ScanStatus, run_checks, selected_checks
 from app.core.db import new_session
 from app.models.domain import Domain
+from app.models.github import GithubInstallation, Repo
 from app.models.scan import FindingRecord, Scan, ScanJobStatus, utc_now
+from app.repos.scanner import REPO_STEPS, RepoScanLimitError, RepoScanResult, scan_repository
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -28,6 +33,14 @@ _PROOF_GONE_REASON = (
 )
 _PROOF_UNKNOWN_REASON = (
     "We couldn't re-confirm that you own this domain, so these checks did not run."
+)
+
+# Enforced on Linux. Kept under REPO_SCAN_STALE_AFTER, and over the scanner's own caps.
+REPO_TASK_TIME_LIMIT_SECONDS = 840
+_REPO_NOT_LINKED = "This repository is no longer connected to your account."
+_REPO_SCAN_FAILED = "We couldn't finish scanning this repository. Please try again."
+_TOO_MANY_FINDINGS = (
+    "This repository has more findings than we can list, so only the most serious are shown."
 )
 
 
@@ -148,6 +161,158 @@ def _ownership_problem(scan_id: UUID) -> str | None:
         )
         session.commit()
     return _PROOF_GONE_REASON
+
+
+def initial_repo_progress() -> dict[str, Any]:
+    return _progress(0, len(REPO_STEPS), None)
+
+
+@dataclass(frozen=True)
+class _RepoTarget:
+    repo_id: UUID
+    installation_id: int
+    github_repo_id: int
+    before_sha: str | None
+    after_sha: str | None
+
+
+def _repo_target(scan_id: UUID) -> _RepoTarget | None:
+    """Return what to scan, or None if the scan's owner no longer has this repo.
+
+    Security: checked again here, because the app can be uninstalled while a scan is queued.
+    """
+    with new_session() as session:
+        scan = session.get_one(Scan, scan_id)
+        repo = session.get(Repo, scan.repo_id) if scan.repo_id is not None else None
+        if repo is None or repo.owner_id != scan.owner_id:
+            return None
+        installation = session.get(GithubInstallation, repo.installation_id)
+        if installation is None or installation.suspended_at is not None:
+            return None
+        return _RepoTarget(
+            repo_id=repo.id,
+            installation_id=installation.installation_id,
+            github_repo_id=repo.github_repo_id,
+            before_sha=scan.before_sha,
+            after_sha=scan.after_sha,
+        )
+
+
+def _save_repo_report(
+    scan_id: UUID, repo_id: UUID, result: RepoScanResult, steps: Sequence[str]
+) -> None:
+    total = len(REPO_STEPS)
+    with new_session() as session:
+        # Held until commit, so two scans of one repo can't save the same secret at once.
+        repo = session.get(Repo, repo_id, with_for_update=True)
+        if repo is None:
+            session.rollback()
+            _update_running(scan_id, status=ScanJobStatus.FAILED, finished_at=utc_now())
+            return
+
+        updated = session.exec(
+            update(Scan)
+            .where(Scan.id == scan_id, Scan.status == ScanJobStatus.RUNNING)
+            .values(
+                status=ScanJobStatus.DONE,
+                result_status=ScanStatus.PARTIAL if result.truncated else ScanStatus.COMPLETE,
+                incomplete_reason=_TOO_MANY_FINDINGS if result.truncated else None,
+                progress_json=_progress(total, total, None, steps),
+                finished_at=utc_now(),
+            )
+        )
+        if updated.rowcount == 0:
+            session.rollback()
+            return
+
+        # A secret already on file keeps its row, and so its first-seen date.
+        known = set(
+            session.exec(select(FindingRecord.fingerprint).where(FindingRecord.repo_id == repo_id))
+        )
+        session.add_all(
+            FindingRecord(
+                scan_id=scan_id,
+                repo_id=repo_id,
+                check_id=hit.check_id,
+                category=Category.SECRETS,
+                severity=hit.severity,
+                title=hit.title,
+                evidence_masked=hit.masked,
+                location=f"{hit.file_path}:{hit.line}",
+                rule_id=hit.rule_id,
+                file_path=hit.file_path,
+                line=hit.line,
+                commit_sha=hit.commit_sha,
+                fingerprint=hit.fingerprint,
+            )
+            for hit in result.hits
+            if hit.fingerprint not in known
+        )
+        if result.full_history:
+            repo.first_full_scan_at = repo.first_full_scan_at or utc_now()
+            repo.needs_full_scan = False
+            # A complete view of the history, so anything missing was rewritten out of it. A
+            # truncated list proves nothing about what it left out.
+            if not result.truncated:
+                session.exec(
+                    delete(FindingRecord).where(
+                        FindingRecord.repo_id == repo_id,
+                        FindingRecord.fingerprint.not_in({hit.fingerprint for hit in result.hits}),
+                    )
+                )
+        repo.full_name = result.full_name
+        session.commit()
+
+
+@celery_app.task(name="scans.run_repo", time_limit=REPO_TASK_TIME_LIMIT_SECONDS)
+def run_repo_scan(scan_id: str) -> None:
+    """Search a linked repo's git history for secrets. Stores masked results only."""
+    job_id = UUID(scan_id)
+    if _claim_scan(job_id) is None:
+        return
+
+    total = len(REPO_STEPS)
+    finished: list[str] = []
+
+    def on_step(step: str) -> None:
+        _update_running(job_id, progress_json=_progress(len(finished), total, step, finished))
+        finished.append(step)
+
+    try:
+        target = _repo_target(job_id)
+        if target is None:
+            _update_running(
+                job_id,
+                status=ScanJobStatus.FAILED,
+                incomplete_reason=_REPO_NOT_LINKED,
+                finished_at=utc_now(),
+            )
+            return
+        result = scan_repository(
+            target.installation_id,
+            target.github_repo_id,
+            before_sha=target.before_sha,
+            after_sha=target.after_sha,
+            on_step=on_step,
+        )
+        _save_repo_report(job_id, target.repo_id, result, finished)
+    except RepoScanLimitError as exc:
+        _update_running(
+            job_id,
+            status=ScanJobStatus.DONE,
+            result_status=ScanStatus.INCOMPLETE,
+            incomplete_reason=str(exc),
+            finished_at=utc_now(),
+        )
+    except Exception as exc:
+        # Security: only the error type is logged, since a message could echo repo content.
+        logger.error("repo scan %s failed: %s", scan_id, type(exc).__name__)
+        _update_running(
+            job_id,
+            status=ScanJobStatus.FAILED,
+            incomplete_reason=_REPO_SCAN_FAILED,
+            finished_at=utc_now(),
+        )
 
 
 @celery_app.task(name="scans.run_full")

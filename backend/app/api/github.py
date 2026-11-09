@@ -9,11 +9,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete
+from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from app.api.scans import SessionDep, SignedInDep, hash_token
+from app.api.scans import SessionDep, SignedInDep, enqueue_scan, hash_token, lock_target
 from app.core.auth import (
     AuthUnavailableError,
     ensure_profile,
@@ -34,7 +34,16 @@ from app.core.github_app import (
 )
 from app.core.rate_limit import limiter
 from app.models.github import GithubInstallation, GithubInstallState, Repo
-from app.models.scan import utc_now
+from app.models.scan import (
+    REPO_SCAN_STALE_AFTER,
+    UNFINISHED_STATUSES,
+    Scan,
+    ScanJobStatus,
+    ScanMode,
+    TargetType,
+    utc_now,
+)
+from app.workers.tasks import initial_repo_progress, run_repo_scan
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +51,8 @@ router = APIRouter(prefix="/api", tags=["github"])
 
 INSTALL_URL_RATE_LIMIT = "10/minute"
 LINK_RATE_LIMIT = "10/minute"
+REPO_SCAN_RATE_LIMIT = "5/minute"
+HOURLY_FULL_REPO_SCAN_CAP = 10
 INSTALL_STATE_LIFETIME = timedelta(minutes=10)
 MAX_POSTGRES_BIGINT = 2**63 - 1
 
@@ -76,6 +87,13 @@ class LinkRequest(BaseModel):
 class LinkResult(BaseModel):
     account_login: str
     repositories: int
+
+
+class RepoScanCreated(BaseModel):
+    id: UUID
+    status: ScanJobStatus
+    # True when a whole-history scan of this repo was already running.
+    reused: bool
 
 
 class RepoOut(BaseModel):
@@ -293,6 +311,85 @@ def link_installation(
     sync_repositories(session, installation, repositories)
     session.commit()
     return LinkResult(account_login=info.account.login, repositories=len(repositories))
+
+
+def _owned_repo(session: Session, repo_id: UUID, viewer_id: UUID) -> Repo:
+    repo = session.get(Repo, repo_id)
+    # Security: 404 for someone else's repo too, so ids can't be probed for existence.
+    if repo is None or repo.owner_id != viewer_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Repository not found.")
+    return repo
+
+
+def _running_full_scan(session: Session, repo_id: UUID, now: datetime) -> Scan | None:
+    return session.exec(
+        select(Scan)
+        .where(
+            Scan.repo_id == repo_id,
+            Scan.before_sha.is_(None),
+            Scan.after_sha.is_(None),
+            Scan.status.in_(UNFINISHED_STATUSES),
+            Scan.created_at >= now - REPO_SCAN_STALE_AFTER,
+        )
+        .limit(1)
+    ).first()
+
+
+@router.post(
+    "/repos/{repo_id}/scan", response_model=RepoScanCreated, status_code=status.HTTP_202_ACCEPTED
+)
+@limiter.limit(REPO_SCAN_RATE_LIMIT)
+def start_repo_scan(
+    request: Request,
+    response: Response,
+    repo_id: UUID,
+    session: SessionDep,
+    viewer: SignedInDep,
+) -> RepoScanCreated:
+    repo = _owned_repo(session, repo_id, viewer.id)
+    installation = session.get_one(GithubInstallation, repo.installation_id)
+    if installation.suspended_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=_SUSPENDED)
+
+    now = utc_now()
+    lock_target(session, f"repo:{repo.id}")
+    running = _running_full_scan(session, repo.id, now)
+    if running is not None:
+        response.status_code = status.HTTP_200_OK
+        return RepoScanCreated(id=running.id, status=running.status, reused=True)
+
+    started = session.exec(
+        select(func.count())
+        .select_from(Scan)
+        .where(
+            Scan.repo_id == repo.id,
+            Scan.before_sha.is_(None),
+            Scan.after_sha.is_(None),
+            Scan.created_at >= now - timedelta(hours=1),
+        )
+    ).one()
+    if started >= HOURLY_FULL_REPO_SCAN_CAP:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="This repository has been scanned too many times recently. Try again later.",
+            headers={"Retry-After": "3600"},
+        )
+
+    # Security: FULL mode, because only the owner may ever read a full scan.
+    scan = Scan(
+        owner_id=viewer.id,
+        repo_id=repo.id,
+        target_type=TargetType.REPO,
+        target=repo.full_name,
+        mode=ScanMode.FULL,
+        progress_json=initial_repo_progress(),
+    )
+    session.add(scan)
+    scan_id, scan_status = scan.id, scan.status
+    # Committed before queueing, so the worker can't look for a row that doesn't exist yet.
+    session.commit()
+    enqueue_scan(session, scan_id, run_repo_scan)
+    return RepoScanCreated(id=scan_id, status=scan_status, reused=False)
 
 
 @router.get("/repos", response_model=list[RepoOut])

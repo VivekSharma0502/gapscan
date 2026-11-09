@@ -13,7 +13,7 @@ from sqlmodel import Session, select
 from app.api.scans import ScanSummary, SessionDep, SignedInDep, readable_by, scan_summary
 from app.checks.runner import ScanStatus
 from app.models.domain import Domain
-from app.models.scan import Scan, ScanJobStatus, ScanMode, utc_now
+from app.models.scan import Scan, ScanJobStatus, ScanMode, TargetType, utc_now
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -127,9 +127,10 @@ def get_dashboard(session: SessionDep, viewer: SignedInDep) -> DashboardOut:
             )
         )
 
+    # Websites only. A repo scan has no grade, and its results live on the Repositories page.
     recent = session.exec(
         select(Scan)
-        .where(readable_by(viewer.id))
+        .where(readable_by(viewer.id), Scan.target_type == TargetType.WEB)
         .order_by(Scan.created_at.desc(), Scan.id.desc())
         .limit(RECENT_SCANS)
     )

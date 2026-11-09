@@ -21,6 +21,7 @@ from app.core.db import get_session
 from app.core.rate_limit import limiter
 from app.core.safe_http import BlockedTargetError, normalize_scan_target
 from app.models.scan import (
+    REPO_SCAN_STALE_AFTER,
     SCAN_STALE_AFTER,
     UNFINISHED_STATUSES,
     FindingRecord,
@@ -156,7 +157,8 @@ def scan_summary(scan: Scan, now: datetime) -> ScanSummary:
         created_at = created_at.replace(tzinfo=UTC)
     # A list is read-only, so a scan that lost its worker is reported as failed without
     # being saved as failed. Otherwise it would show as running forever.
-    stale = scan.status in UNFINISHED_STATUSES and created_at < now - SCAN_STALE_AFTER
+    limit = REPO_SCAN_STALE_AFTER if scan.target_type is TargetType.REPO else SCAN_STALE_AFTER
+    stale = scan.status in UNFINISHED_STATUSES and created_at < now - limit
     return ScanSummary(
         id=scan.id,
         target=scan.target,
@@ -377,7 +379,13 @@ def _expire_if_stale(session: Session, scan_id: UUID, now: datetime) -> None:
         .where(
             Scan.id == scan_id,
             Scan.status.in_(UNFINISHED_STATUSES),
-            Scan.created_at < now - SCAN_STALE_AFTER,
+            or_(
+                and_(Scan.target_type == TargetType.WEB, Scan.created_at < now - SCAN_STALE_AFTER),
+                and_(
+                    Scan.target_type == TargetType.REPO,
+                    Scan.created_at < now - REPO_SCAN_STALE_AFTER,
+                ),
+            ),
         )
         .values(status=ScanJobStatus.FAILED, finished_at=now)
     )

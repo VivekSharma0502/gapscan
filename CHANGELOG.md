@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-11-09: Phase 3, step 3a-4: gitleaks repo scanner
+
+**Added**
+- Repo scans with gitleaks over a full clone: the whole history on a repo's first scan and on `POST /api/repos/{id}/scan`, only the new commits on a push. Run the worker with `-Q celery,repo_scans`, or repo scans stay queued.
+- Pushes now start scans. A new branch scans only what isn't on the default branch. A force-push, or a commit that can't be found, scans everything.
+- Findings are deduped per repo on gitleaks' fingerprint, so a rescan keeps the original row and its first-seen date. A complete whole-history scan removes findings that have been rewritten out of history.
+- Caps: 500 MB reported size, 1 GB on disk during the clone, 3 minutes to clone, 5 minutes to scan, 5 MB per file, 1,000 findings (most serious first). Hitting one finishes the scan as incomplete, with a reason.
+- Our own gitleaks rules for Supabase secret and service role keys, which gitleaks doesn't cover.
+
+**Security**
+- git runs with `GIT_TERMINAL_PROMPT=0`, HTTPS as the only protocol (`protocol.file.allow=never`), hooks pointed at the null device, no credential helpers, redirects off, and no system or user git config. The clone is bare with an empty template, so nothing from the repo is written out as files.
+- The URL is always `https://github.com/<name>.git`, with the name freshly returned by the GitHub API for the repo's numeric id.
+- The token covers one repo, read-only, travels by environment variable rather than arguments or the URL, is scoped to github.com, and is revoked as soon as the clone ends. git and gitleaks get a minimal environment, so they can't see the worker's own secrets.
+- `--redact=100` and a pinned `--config`, so a repo can't switch off its own rules. A report containing anything other than `REDACTED` as a secret is refused whole. Only rule, file, line, commit and fingerprint are read from it, so author names, emails and commit messages never reach the database.
+- Tool output is discarded rather than captured. The temp folder is removed in `finally`, including on Windows, and a sweep at worker start clears anything left by a crash.
+- Repo scans are owner-only, and push scans are capped at 30 per repo per hour. Past the cap, or if the queue is down, the next scan covers the whole history so nothing is missed.
+
+**Changed**
+- Repo scans get a 15-minute stale limit and their own queue and task time limit. The dashboard's recent scans list shows websites only.
+
 ## 2026-11-09: Phase 3, step 3a-3: GitHub webhook
 
 **Added**

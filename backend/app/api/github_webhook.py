@@ -11,19 +11,28 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, StringConstraints, TypeAdapter, ValidationError
-from sqlalchemy import delete
+from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlmodel import Session, select, update
 
 from app.api.github import upsert_repositories
-from app.api.scans import SessionDep
+from app.api.scans import SessionDep, enqueue_scan
 from app.core.config import settings
 from app.core.github_app import GithubRepositoryRef
 from app.models.github import GithubDelivery, GithubInstallation, Repo
-from app.models.scan import utc_now
+from app.models.scan import (
+    REPO_SCAN_STALE_AFTER,
+    Scan,
+    ScanJobStatus,
+    ScanMode,
+    TargetType,
+    utc_now,
+)
+from app.workers.tasks import initial_repo_progress, run_repo_scan
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +43,7 @@ router = APIRouter(prefix="/api/github", tags=["github"])
 MAX_WEBHOOK_BYTES = 10 * 1024 * 1024
 # Longer than the 3 days GitHub keeps a delivery available to resend.
 DELIVERY_RETENTION = timedelta(days=7)
+HOURLY_PUSH_SCAN_CAP = 30
 ZERO_SHA = "0" * 40
 BRANCH_REF_PREFIX = "refs/heads/"
 
@@ -186,18 +196,78 @@ def push_scan_range(event: PushEvent, repo: Repo) -> PushRange | None:
     return PushRange(event.before, event.after)
 
 
-def _handle_push(session: Session, event: PushEvent) -> None:
+def _queue_push_scan(session: Session, repo: Repo, scan_range: PushRange) -> UUID | None:
+    """Create the scan for a push and return its id, or None if none is needed."""
+    now = utc_now()
+    # Held until commit, so simultaneous pushes can't all count below the cap.
+    session.get(Repo, repo.id, with_for_update=True)
+
+    if scan_range == FULL_HISTORY:
+        # One still waiting will clone the latest commits anyway, so a burst needs only one.
+        waiting = session.exec(
+            select(Scan.id)
+            .where(
+                Scan.repo_id == repo.id,
+                Scan.before_sha.is_(None),
+                Scan.after_sha.is_(None),
+                Scan.status == ScanJobStatus.QUEUED,
+                Scan.created_at >= now - REPO_SCAN_STALE_AFTER,
+            )
+            .limit(1)
+        ).first()
+        if waiting is not None:
+            return None
+
+    started = session.exec(
+        select(func.count())
+        .select_from(Scan)
+        .where(Scan.repo_id == repo.id, Scan.created_at >= now - timedelta(hours=1))
+    ).one()
+    if started >= HOURLY_PUSH_SCAN_CAP:
+        # Security: pushes are free for anyone with write access, so they can't be allowed to
+        # consume the workers. Nothing goes unscanned: the next scan covers everything.
+        repo.needs_full_scan = True
+        return None
+
+    # Security: FULL mode, because only the owner may ever read a full scan.
+    scan = Scan(
+        owner_id=repo.owner_id,
+        repo_id=repo.id,
+        target_type=TargetType.REPO,
+        target=repo.full_name,
+        mode=ScanMode.FULL,
+        before_sha=scan_range.before_sha,
+        after_sha=scan_range.after_sha,
+        progress_json=initial_repo_progress(),
+    )
+    session.add(scan)
+    return scan.id
+
+
+def _handle_push(session: Session, event: PushEvent) -> UUID | None:
     repo = find_push_repo(session, event)
     if repo is None:
-        return
+        return None
     scan_range = push_scan_range(event, repo)
-    if scan_range is not None:
-        # The scan itself is started here once the repo scanner exists.
-        logger.info("push needs a scan: repo %s", repo.id)
+    if scan_range is None:
+        return None
+    return _queue_push_scan(session, repo, scan_range)
 
 
-# Each event's payload shape and what to do with it. Anything else is ignored.
-_EVENTS: dict[str, tuple[type[_Payload], Callable[[Session, Any], None]]] = {
+def _start_scan(session: Session, scan_id: UUID) -> None:
+    try:
+        enqueue_scan(session, scan_id, run_repo_scan)
+    except HTTPException:
+        # The delivery is already recorded, so GitHub resending it wouldn't help. Instead the
+        # next scan is told to cover everything, which includes these commits.
+        repo_id = session.get_one(Scan, scan_id).repo_id
+        session.exec(update(Repo).where(Repo.id == repo_id).values(needs_full_scan=True))
+        session.commit()
+
+
+# Each event's payload shape and what to do with it. Anything else is ignored. A handler
+# returns the id of a scan to start, which can only be queued once the transaction commits.
+_EVENTS: dict[str, tuple[type[_Payload], Callable[[Session, Any], UUID | None]]] = {
     "push": (PushEvent, _handle_push),
     "installation": (_InstallationEvent, _handle_installation),
     "installation_repositories": (
@@ -254,10 +324,12 @@ def receive_webhook(
         return WebhookResult(status="duplicate")
 
     # An error from here on leaves the transaction uncommitted, delivery record included.
-    handler(session, event)
+    scan_id = handler(session, event)
     session.exec(
         delete(GithubDelivery).where(GithubDelivery.received_at < utc_now() - DELIVERY_RETENTION)
     )
     # The record of this delivery and what it changed commit together.
     session.commit()
+    if scan_id is not None:
+        _start_scan(session, scan_id)
     return WebhookResult(status="processed")

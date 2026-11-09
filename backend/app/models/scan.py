@@ -14,6 +14,8 @@ from app.checks.runner import ScanStatus
 # A scan still unfinished after this long has lost its worker. Celery's time limits don't
 # work with the solo pool used on Windows, so scans are expired by age as well.
 SCAN_STALE_AFTER = timedelta(minutes=5)
+# Downloading and searching a whole git history takes far longer than checking a website.
+REPO_SCAN_STALE_AFTER = timedelta(minutes=15)
 
 
 class ScanJobStatus(StrEnum):

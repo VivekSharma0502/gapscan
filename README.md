@@ -95,7 +95,7 @@ cd backend
 
 # Terminal 2: scan worker
 cd backend
-.venv/Scripts/python.exe -m celery -A app.workers.celery_app worker --pool=solo --loglevel=info
+.venv/Scripts/python.exe -m celery -A app.workers.celery_app worker --pool=solo --loglevel=info -Q celery,repo_scans
 
 # Terminal 3: web app on http://localhost:3000
 cd frontend
@@ -104,7 +104,9 @@ npm run dev
 
 Open http://localhost:3000 and enter a domain to run a quick scan.
 
-The worker runs the scans, so without it they stay queued and are marked failed after 5 minutes. `--pool=solo` is required on Windows, where Celery's default pool doesn't work, and runs one scan at a time. Restart the worker after changing its code, because it doesn't reload.
+The worker runs the scans, so without it they stay queued and are marked failed after 5 minutes. `--pool=solo` is required on Windows, where Celery's default pool doesn't work, and runs one scan at a time. Restart the worker after changing its code, because it doesn't reload. `-Q celery,repo_scans` makes it serve website scans and repo scans. Without it, repo scans stay queued. Because `--pool=solo` runs one job at a time, a long repo scan delays website scans locally.
+
+`--reload` only watches code, so restart the API after editing `.env`.
 
 ## Tests and lint
 
@@ -130,4 +132,4 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --forwarded-allow-ips="<your pro
 - Without `--forwarded-allow-ips`, every visitor appears to come from the proxy and they all share one `POST /api/scans/quick` limit of 5 per minute.
 - Don't use `*` unless the proxy is the only way to reach the app. Otherwise a client can forge `X-Forwarded-For` and get around the limit.
 
-Run the worker without `--pool=solo` on Linux. The default pool runs scans in parallel and enforces the task time limit.
+Run the worker without `--pool=solo` on Linux. The default pool runs scans in parallel and enforces the task time limit. In production, run a separate worker with `-Q repo_scans` so repo scans can't hold up website scans, and install `git` and `gitleaks` on it.

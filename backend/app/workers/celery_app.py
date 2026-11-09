@@ -3,10 +3,11 @@
 from typing import Any
 
 from celery import Celery
-from celery.signals import worker_process_init
+from celery.signals import worker_process_init, worker_ready
 
 from app.core import db
 from app.core.config import settings
+from app.repos.scanner import sweep_abandoned_workspaces
 
 celery_app = Celery("scankit", broker=settings.redis_url, include=["app.workers.tasks"])
 
@@ -22,7 +23,15 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
     # Kept under SCAN_STALE_AFTER. Enforced on Linux, where the prefork pool supports it.
     task_time_limit=270,
+    # Repo scans can run for minutes, so their own queue lets production give them a separate
+    # worker and keep website scans moving.
+    task_routes={"scans.run_repo": {"queue": "repo_scans"}},
 )
+
+
+@worker_ready.connect
+def clean_up_after_a_crash(**_kwargs: Any) -> None:
+    sweep_abandoned_workspaces()
 
 
 @worker_process_init.connect

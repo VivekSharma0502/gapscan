@@ -59,9 +59,15 @@ def push_payload(**overrides: Any) -> dict[str, Any]:
     } | overrides
 
 
+class FakeQueue:
+    def apply_async(self, args: tuple[str], retry: bool = True) -> None:
+        pass
+
+
 @pytest.fixture
 def client(db_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(settings, "github_webhook_secret", SecretStr(SECRET))
+    monkeypatch.setattr(github_webhook, "run_repo_scan", FakeQueue())
     yield TestClient(app)
 
 

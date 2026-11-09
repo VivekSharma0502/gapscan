@@ -43,6 +43,7 @@ class Category(StrEnum):
     DNS_EMAIL = "dns_email"
     CMS = "cms"
     EXPOSURE = "exposure"
+    SECRETS = "secrets"
 
 
 class Platform(StrEnum):

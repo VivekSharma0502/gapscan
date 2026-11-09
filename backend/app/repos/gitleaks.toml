@@ -1,0 +1,24 @@
+# GapScan's gitleaks rules: gitleaks' own defaults, plus what they don't cover.
+#
+# Security: always passed explicitly with --config. Otherwise gitleaks would read a
+# .gitleaks.toml from the scanned repo, letting a repo switch off its own rules.
+
+title = "GapScan"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "supabase-secret-key"
+description = "Supabase secret API key"
+regex = '''\bsb_secret_[A-Za-z0-9_-]{20,}'''
+keywords = ["sb_secret_"]
+
+# A legacy Supabase key is a JWT, and anon keys are public by design, so only the role tells
+# them apart. The role sits in the base64 payload, where "service_role" can start at any of
+# three alignments. These are its three encodings.
+[[rules]]
+id = "supabase-service-role-jwt"
+description = "Supabase service role key"
+regex = '''\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*(?:c2VydmljZV9yb2xl|NlcnZpY2Vfcm9sZ|zZXJ2aWNlX3JvbG)[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+'''
+keywords = ["c2VydmljZV9yb2xl", "NlcnZpY2Vfcm9sZ", "zZXJ2aWNlX3JvbG"]

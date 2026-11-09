@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     github_app_private_key_b64: SecretStr = SecretStr("")
     github_webhook_secret: SecretStr = SecretStr("")
 
+    # The gitleaks program. A full path if it isn't on the worker's PATH.
+    gitleaks_path: str = "gitleaks"
+
     @field_validator("supabase_url")
     @classmethod
     def strip_trailing_slash(cls, value: str) -> str:
