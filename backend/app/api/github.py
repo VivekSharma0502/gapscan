@@ -2,6 +2,7 @@
 
 import logging
 import secrets
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import UUID
@@ -25,6 +26,7 @@ from app.core.github_app import (
     GithubAppNotConfiguredError,
     GithubInstallationInfo,
     GithubRepository,
+    GithubRepositoryRef,
     create_installation_token,
     get_installation,
     list_installation_repositories,
@@ -173,25 +175,25 @@ def _save_installation(
     return installation
 
 
-def sync_repositories(
-    session: Session, installation: GithubInstallation, repositories: list[GithubRepository]
+def upsert_repositories(
+    session: Session,
+    installation: GithubInstallation,
+    repositories: Sequence[GithubRepositoryRef],
 ) -> None:
-    """Make the stored repos for an installation match what GitHub says it can access."""
-    current_ids = {repository.id for repository in repositories}
+    """Add these repos to an installation, or refresh the ones it already has."""
+    ids = {repository.id for repository in repositories}
     existing = {
         repo.github_repo_id: repo
-        for repo in session.exec(select(Repo).where(Repo.installation_id == installation.id))
+        for repo in session.exec(
+            select(Repo).where(
+                Repo.installation_id == installation.id, Repo.github_repo_id.in_(ids)
+            )
+        )
     }
-    for github_repo_id, repo in existing.items():
-        if github_repo_id not in current_ids:
-            session.delete(repo)
-
     # Security: a repo arriving from another installation was transferred. Its old row is
     # removed instead of moved, so the new owner doesn't inherit the old owner's findings.
     transferred = session.exec(
-        select(Repo).where(
-            Repo.github_repo_id.in_(current_ids), Repo.installation_id != installation.id
-        )
+        select(Repo).where(Repo.github_repo_id.in_(ids), Repo.installation_id != installation.id)
     )
     for repo in transferred:
         session.delete(repo)
@@ -212,6 +214,17 @@ def sync_repositories(
         else:
             repo.full_name = repository.full_name
             repo.is_private = repository.private
+
+
+def sync_repositories(
+    session: Session, installation: GithubInstallation, repositories: list[GithubRepository]
+) -> None:
+    """Make the stored repos for an installation match what GitHub says it can access."""
+    current_ids = {repository.id for repository in repositories}
+    for repo in session.exec(select(Repo).where(Repo.installation_id == installation.id)):
+        if repo.github_repo_id not in current_ids:
+            session.delete(repo)
+    upsert_repositories(session, installation, repositories)
 
 
 @router.post("/github/install-url", response_model=InstallUrlOut)

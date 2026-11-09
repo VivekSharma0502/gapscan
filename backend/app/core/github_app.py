@@ -66,12 +66,12 @@ class GithubInstallationInfo(_Response):
     suspended_at: datetime | None = None
 
 
-class GithubRepository(_Response):
+class GithubRepositoryRef(_Response):
+    """The fields GitHub includes everywhere it names a repo, webhooks included."""
+
     id: int
     full_name: str
     private: bool
-    # In kilobytes, as GitHub last measured it, so only a first check on size.
-    size: int = Field(ge=0)
 
     @field_validator("full_name")
     @classmethod
@@ -79,6 +79,11 @@ class GithubRepository(_Response):
         if not _FULL_NAME_RE.fullmatch(value) or value.split("/")[1] in _DOT_NAMES:
             raise ValueError("not an owner/name pair")
         return value
+
+
+class GithubRepository(GithubRepositoryRef):
+    # In kilobytes, as GitHub last measured it, so only a first check on size.
+    size: int = Field(ge=0)
 
 
 class _TokenResponse(_Response):

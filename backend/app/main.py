@@ -8,6 +8,7 @@ from slowapi.errors import RateLimitExceeded
 from app.api.dashboard import router as dashboard_router
 from app.api.domains import router as domains_router
 from app.api.github import router as github_router
+from app.api.github_webhook import router as github_webhook_router
 from app.api.health import router as health_router
 from app.api.scans import router as scans_router
 from app.core.config import settings
@@ -45,3 +46,4 @@ app.include_router(scans_router)
 app.include_router(domains_router)
 app.include_router(dashboard_router)
 app.include_router(github_router)
+app.include_router(github_webhook_router)

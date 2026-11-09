@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-11-09: Phase 3, step 3a-3: GitHub webhook
+
+**Added**
+- `POST /api/github/webhook` handles `installation`, `installation_repositories` and `push`. Other events are acknowledged and ignored.
+- Uninstalling the app removes its repos and their findings. Suspending and unsuspending are recorded. Repos added or removed on GitHub show up in the list.
+- A push now works out which commits need scanning: only the new ones normally, the whole history for a repo's first scan, a force-push or a missed push. Starting that scan arrives with the scanner in the next step.
+
+**Security**
+- Every request's `X-Hub-Signature-256` is checked in constant time against the raw bytes, before anything is parsed. With no secret configured, every request is refused, because an empty secret would let anyone sign.
+- The body is capped at 10 MB while being read, so unsigned requests can't exhaust memory.
+- `X-GitHub-Delivery` is recorded in the same transaction as the changes it made, so a replayed delivery does nothing, while one that failed can still be resent.
+- A webhook can't link an installation to a user. Only the signed-in flow can.
+- Only declared payload fields are read, so author names and emails are dropped on arrival. Commit ids must be exactly 40 hex characters, because they will be passed to git.
+
 ## 2026-11-09: Phase 3, step 3a-2: secure GitHub installation linking
 
 **Added**
