@@ -13,7 +13,7 @@ from dataclasses import replace
 from time import monotonic
 from urllib.parse import quote
 
-from app.checks.active_collector import gave_no_real_answer
+from app.checks.active_collector import gave_no_real_answer, polite_pause
 from app.checks.baas_discovery import is_official_rtdb_host, is_valid_bucket
 from app.checks.base import (
     BaasKind,
@@ -38,6 +38,7 @@ _DENIED_STATUSES = frozenset({401, 403, 404, 423})
 
 
 def _get(url: str, host: str, max_bytes: int) -> SafeResponse | None:
+    polite_pause()
     try:
         # Security: allowed_hosts stops a redirect from carrying this probe off the official
         # host, so a reply can't turn it into a request to anywhere else.

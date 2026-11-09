@@ -798,3 +798,27 @@ def test_ordinary_failure_to_reconfirm_keeps_its_wording(
 
     assert load(db_engine, scan_id).blocked_by is None
     assert all("couldn't re-confirm" in i["reason"] for i in active_skips(db_engine, scan_id))
+
+
+@pytest.mark.usefixtures("probe_net")
+def test_challenged_verification_file_ends_the_scan_at_once(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proof(monkeypatch, BLOCKED_FILE)
+
+    def must_not_run(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("the scan kept sending requests after a challenge")
+
+    monkeypatch.setattr(tasks, "collect_context", must_not_run)
+    monkeypatch.setattr(tasks, "discover_backends", must_not_run)
+    monkeypatch.setattr(tasks, "attach_probes", must_not_run)
+    owner = uuid4()
+    scan_id = add_full(db_engine, owner, add_domain(db_engine, owner))
+
+    run_full_scan(str(scan_id))
+
+    scan = load(db_engine, scan_id)
+    assert scan.status is ScanJobStatus.DONE
+    assert scan.result_status is ScanStatus.INCOMPLETE
+    assert scan.blocked_by is BotProtection.VERCEL
+    assert "bot protection" in (scan.incomplete_reason or "")

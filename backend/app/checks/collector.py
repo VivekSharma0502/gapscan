@@ -159,11 +159,16 @@ def collect_context(hostname: str, *, on_step: StepCallback | None = None) -> Sc
     https, https_reason, blocked_by = _fetch_homepage(name, tls)
 
     start_step("http_fetch")
-    try:
-        http = safe_get(f"http://{name}/")
-    except SafeHttpError:
-        http = None
-        reasons[Input.HTTP] = "We could not load the site over HTTP."
+    http: SafeResponse | None = None
+    if blocked_by is not None:
+        # Security: the first challenge ends this scan's requests to the site.
+        reasons[Input.HTTP] = https_reason or "We could not load the site over HTTP."
+    else:
+        try:
+            http = safe_get(f"http://{name}/")
+            blocked_by = bot_protection(http)
+        except SafeHttpError:
+            reasons[Input.HTTP] = "We could not load the site over HTTP."
 
     not_applicable: set[Input] = set()
     homepage_via_http = False

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-11-10: Polite scanning
+
+**Changed**
+- At most about 2 requests a second to any one host, enforced in `safe_http` so every request and redirect counts, along with TLS handshakes. Restart the worker to pick this up.
+- Active checks (sensitive paths, scripts and backend probes) wait 0.5 to 0.9 seconds, at random, before each request. A full scan takes up to about 30 seconds longer.
+- The User-Agent is now `GapScanBot/1.0 (+https://viivek.xyz/bot)`.
+
+**Fixed**
+- The first bot-protection challenge now ends the scan's requests to that site. Before, a challenge only stopped the step it happened in, so later steps still sent requests. A challenge on the verification file ends the scan straight away, and it finishes as incomplete.
+
+**Why**
+- Vercel's DDoS Mitigation challenged the scanner 17 times because its requests arrived as a burst.
+
+**Decisions**
+- The limit is per worker process. Only one full scan of a domain runs at a time, so this is enough for now.
+
 ## 2026-11-10: Phase 3, step 3b: name the platform blocking a scan
 
 **Changed**

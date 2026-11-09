@@ -11,6 +11,7 @@ from app.checks.active_collector import (
     MAX_HTML_BYTES,
     allowed_probe_hosts,
     gave_no_real_answer,
+    polite_pause,
     same_origin_script_paths,
 )
 from app.checks.baas_discovery import find_backends, find_exposed_keys
@@ -124,7 +125,8 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
     skipped: list[SkippedScript] = []
     read, failed, total_bytes = 0, 0, 0
     blocked_by = ctx.blocked_by
-    blocked = False
+    # Security: a challenge earlier in the scan means no more requests to this site.
+    blocked = ctx.blocked_by is not None
 
     def skip(path: str, reason: _Skip) -> None:
         nonlocal failed
@@ -136,6 +138,7 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
         if limit is not None:
             skip(path, limit)
             continue
+        polite_pause()
         try:
             # Security: allowed_hosts stops a redirect from carrying this request off the site.
             response = safe_get(

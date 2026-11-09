@@ -4,9 +4,10 @@ Security: nothing here decides whether probing is allowed. The worker calls atta
 only after confirming ownership of a verified domain, and quick scans never reach it.
 """
 
+import random
 from dataclasses import replace
 from html.parser import HTMLParser
-from time import monotonic
+from time import monotonic, sleep
 from urllib.parse import urljoin, urlsplit
 
 from app.checks.base import Input, Probe, ScanContext, bot_protection
@@ -20,6 +21,9 @@ PROBE_BUDGET_SECONDS = 90.0
 MAX_SCRIPTS = 5
 MAX_PATH_LENGTH = 512
 MAX_HTML_BYTES = 512 * 1024
+# Longer than the per-host limit in safe_http, so the gaps really do vary. An even beat of
+# requests is what automated traffic looks like.
+ACTIVE_PAUSE_RANGE_SECONDS = (0.5, 0.9)
 
 _NO_HOMEPAGE_REASON = "We couldn't read the site, so these paths were not checked."
 
@@ -69,6 +73,12 @@ def gave_no_real_answer(response: SafeResponse) -> bool:
     )
 
 
+def polite_pause() -> None:
+    """Wait a short, uneven moment before an active check's request."""
+    # Not security randomness: this only spreads requests out.
+    sleep(random.uniform(*ACTIVE_PAUSE_RANGE_SECONDS))  # noqa: S311
+
+
 def attach_probes(ctx: ScanContext) -> ScanContext:
     """Return the context with its probes. A probe that couldn't be answered is marked so."""
     if ctx.homepage is None:
@@ -78,7 +88,8 @@ def attach_probes(ctx: ScanContext) -> ScanContext:
     allowed = allowed_probe_hosts(ctx.hostname)
     scheme = "http" if ctx.homepage_via_http else "https"
     deadline = monotonic() + PROBE_BUDGET_SECONDS
-    told_to_stop = False
+    # Security: a challenge earlier in the scan means no more requests to this site.
+    told_to_stop = ctx.blocked_by is not None
     blocked_by = ctx.blocked_by
     probes: dict[str, Probe] = {}
 
@@ -86,6 +97,7 @@ def attach_probes(ctx: ScanContext) -> ScanContext:
         probes[path] = Probe(path)
         if told_to_stop or monotonic() >= deadline:
             continue
+        polite_pause()
         try:
             # Security: allowed_hosts stops a redirect from sending this probe to a site
             # nobody has verified. Such a probe stays unanswered rather than counting as clear.

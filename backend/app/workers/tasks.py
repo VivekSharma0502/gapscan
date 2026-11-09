@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +17,8 @@ from app.checks.base import (
     BotProtection,
     Category,
     DiscoveredBackend,
+    Input,
+    ScanContext,
     bot_protection_label,
 )
 from app.checks.collector import COLLECT_STEPS, collect_context
@@ -398,9 +400,16 @@ def run_full_scan(scan_id: str) -> None:
     try:
         on_step(OWNERSHIP_STEP)
         problem = _ownership_problem(job_id)
-        context = collect_context(target, on_step=on_step)
-        if problem is not None:
-            context = replace(context, blocked_by=context.blocked_by or problem.blocked_by)
+        if problem is not None and problem.blocked_by is not None:
+            # Security: the verification file was challenged, so the scan ends here and
+            # sends this site nothing more.
+            context = ScanContext(
+                hostname=target,
+                skip_reasons=dict.fromkeys(Input, problem.reason),
+                blocked_by=problem.blocked_by,
+            )
+        else:
+            context = collect_context(target, on_step=on_step)
         # Scripts come first. A burst of requests for sensitive paths can set off a site's
         # bot protection, which would then block the ordinary script requests too.
         on_step(BAAS_STEP)

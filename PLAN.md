@@ -168,7 +168,8 @@ Grade caps, on top of the points (the numeric score stays as calculated): no HTT
 - Never store or log full secrets; mask everything
 - GitHub App private key in env only; use short-lived installation tokens, don't store user tokens
 - Verify webhook signatures; validate all input with Pydantic; locked-down CORS
-- Scanner sends an honest User-Agent with a link to an "about our scanner" page
+- Scanner sends an honest User-Agent with a link to an "about our scanner" page: `GapScanBot/1.0 (+https://viivek.xyz/bot)`
+- Polite scanning: at most about 2 requests a second per host, a small random delay between active checks, and the first bot-protection challenge ends the scan's requests to that site
 
 ## Pricing (draft, Phase 5)
 - Free: 1 domain, 3 repos, weekly rescans

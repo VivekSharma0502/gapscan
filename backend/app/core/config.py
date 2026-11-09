@@ -17,10 +17,8 @@ class Settings(BaseSettings):
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
 
     # Security: scan traffic identifies itself and links to a page explaining it, so site
-    # owners can see who is probing them. Replace the placeholder URL once that page exists.
-    scanner_user_agent: str = (
-        f"{PRODUCT_NAME.replace(' ', '')}Bot/0.1 (+https://gapscan.example/about-scanner)"
-    )
+    # owners can see who is probing them and find out how to contact us.
+    scanner_user_agent: str = f"{PRODUCT_NAME.replace(' ', '')}Bot/1.0 (+https://viivek.xyz/bot)"
 
     # DNS servers for scan lookups. Empty means use the system's DNS. Security: public
     # resolvers keep scans from seeing internal names served by the host's own DNS.

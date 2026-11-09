@@ -12,6 +12,7 @@ import json
 import re
 import socket
 import ssl
+import threading
 import time
 import warnings
 from collections.abc import Callable, Mapping
@@ -35,6 +36,11 @@ DEFAULT_PORTS = {"http": 80, "https": 443}
 
 MAX_REDIRECTS = 5
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+
+# At most about two requests a second to any one host, redirects included. A scanner that
+# arrives in a burst looks like an attack, and can get a real site's protection switched on.
+MIN_SECONDS_BETWEEN_REQUESTS = 0.5
+_MAX_THROTTLED_HOSTS = 4096
 
 CONNECT_TIMEOUT_SECONDS = 5.0
 READ_TIMEOUT_SECONDS = 10.0
@@ -164,6 +170,42 @@ class _Hop:
 
 
 _T = TypeVar("_T")
+
+
+class _HostThrottle:
+    """Spaces requests to each host, so a scan never arrives as a burst.
+
+    Every request reserves its own slot under the lock and then waits outside it, so
+    concurrent requests to one host queue up without blocking requests to other hosts.
+    """
+
+    def __init__(
+        self,
+        interval: float = MIN_SECONDS_BETWEEN_REQUESTS,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._interval = interval
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._next_slot: dict[str, float] = {}
+
+    def wait_for_turn(self, host: str, deadline: float) -> None:
+        name = host.rstrip(".").lower()
+        with self._lock:
+            now = self._clock()
+            if len(self._next_slot) >= _MAX_THROTTLED_HOSTS:
+                self._next_slot = {key: slot for key, slot in self._next_slot.items() if slot > now}
+            slot = max(now, self._next_slot.get(name, now))
+            if slot > deadline:
+                raise RequestFailedError("deadline exceeded")
+            self._next_slot[name] = slot + self._interval
+        if slot > now:
+            self._sleep(slot - now)
+
+
+_throttle = _HostThrottle()
 
 
 def is_public_ip(ip: IPAddress) -> bool:
@@ -429,6 +471,7 @@ def _send_pinned(
 ) -> _Hop:
     host = url.raw_host.decode("ascii")
     ip = _validated_ip(host, deadline)
+    _throttle.wait_for_turn(host, deadline)
     timeouts = _timeouts(deadline)
 
     # Security: connect to the IP we just validated, not the hostname. If the HTTP
@@ -597,6 +640,7 @@ def _make_legacy_tls_context() -> ssl.SSLContext | None:
 def _tls_handshake(
     ip: IPAddress, name: str, context: ssl.SSLContext, deadline: float
 ) -> ssl.SSLSocket:
+    _throttle.wait_for_turn(name, deadline)
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise RequestFailedError("deadline exceeded")
