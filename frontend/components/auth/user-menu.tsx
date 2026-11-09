@@ -1,6 +1,12 @@
 "use client";
 
-import { CircleUser, Globe, LayoutDashboard, LogOut } from "lucide-react";
+import {
+  CircleUser,
+  FolderGit2,
+  Globe,
+  LayoutDashboard,
+  LogOut,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -66,6 +72,10 @@ export function UserMenu() {
         <DropdownMenuItem render={<Link href="/domains" />}>
           <Globe aria-hidden />
           My domains
+        </DropdownMenuItem>
+        <DropdownMenuItem render={<Link href="/repositories" />}>
+          <FolderGit2 aria-hidden />
+          Repositories
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => void signOut()}>
           <LogOut aria-hidden />

@@ -6,6 +6,8 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const TIMEOUT_MS = 15_000;
 // Verifying waits on the site and on DNS, each of which the backend allows 20 seconds.
 const VERIFY_TIMEOUT_MS = 30_000;
+// Linking makes several calls to Supabase and GitHub, one after another.
+const GITHUB_LINK_TIMEOUT_MS = 60_000;
 const UNREACHABLE_MESSAGE =
   "We couldn't reach the scanner. Check your connection and try again.";
 
@@ -148,6 +150,19 @@ export interface Dashboard {
   recent_scans: ScanSummary[];
 }
 
+export interface Repo {
+  id: string;
+  full_name: string;
+  is_private: boolean;
+  account_login: string;
+  created_at: string;
+}
+
+export interface GithubLinkResult {
+  account_login: string;
+  repositories: number;
+}
+
 export interface ScanPage {
   items: ScanSummary[];
   total: number;
@@ -272,6 +287,29 @@ export function startFullScan(id: string): Promise<FullScanCreated> {
   return request(`/api/domains/${encodeURIComponent(id)}/scan`, {
     method: "POST",
   });
+}
+
+export function getGithubInstallUrl(): Promise<{ url: string }> {
+  return request("/api/github/install-url", { method: "POST" });
+}
+
+export function linkGithubInstallation(link: {
+  installation_id: number;
+  state: string;
+}): Promise<GithubLinkResult> {
+  return request(
+    "/api/github/installations/link",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(link),
+    },
+    GITHUB_LINK_TIMEOUT_MS,
+  );
+}
+
+export function listRepos(signal?: AbortSignal): Promise<Repo[]> {
+  return request("/api/repos", { signal });
 }
 
 export function getDashboard(signal?: AbortSignal): Promise<Dashboard> {

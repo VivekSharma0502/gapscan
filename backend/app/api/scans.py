@@ -231,7 +231,7 @@ def _enforce_hourly_cap(session: Session, hostname: str, now: datetime) -> None:
         )
 
 
-def _hash_token(token: str) -> str:
+def hash_token(token: str) -> str:
     # Security: only the hash is stored. SHA-256 is enough because the token is 256 random
     # bits, so unlike a password it can't be guessed from a wordlist.
     return hashlib.sha256(token.encode()).hexdigest()
@@ -239,7 +239,7 @@ def _hash_token(token: str) -> str:
 
 def _issue_claim(session: Session, scan_id: UUID) -> str:
     token = secrets.token_urlsafe(32)
-    session.add(ScanClaim(scan_id=scan_id, token_hash=_hash_token(token)))
+    session.add(ScanClaim(scan_id=scan_id, token_hash=hash_token(token)))
     return token
 
 
@@ -275,7 +275,7 @@ def _grant_access_to_reused_scan(session: Session, scan: Scan, viewer_id: UUID) 
     session.add(
         ScanClaim(
             scan_id=scan.id,
-            token_hash=_hash_token(secrets.token_urlsafe(32)),
+            token_hash=hash_token(secrets.token_urlsafe(32)),
             claimed_by=viewer_id,
             claimed_at=utc_now(),
         )
@@ -358,7 +358,7 @@ def claim_scans(
     redeemed = session.exec(
         update(ScanClaim)
         .where(
-            ScanClaim.token_hash.in_({_hash_token(token) for token in body.tokens}),
+            ScanClaim.token_hash.in_({hash_token(token) for token in body.tokens}),
             or_(ScanClaim.claimed_by.is_(None), ScanClaim.claimed_by == viewer.id),
         )
         .values(claimed_by=viewer.id, claimed_at=utc_now())

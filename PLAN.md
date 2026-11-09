@@ -125,6 +125,8 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 | DELETE | /api/domains/{id} | auth. Past scans stay readable by their owner |
 | POST | /api/domains/{id}/verify | DNS TXT lookup and file fetch, with a reason for each failure |
 | POST | /api/domains/{id}/scan | full scan, verified only |
+| POST | /api/github/install-url | auth. Returns the GitHub install link with a one-time state |
+| POST | /api/github/installations/link | auth. Links an installation only if the state is the user's own and GitHub says their account owns it |
 | GET | /api/repos | auth |
 | POST | /api/repos/{id}/scan | auth |
 | POST | /api/github/webhook | verify `X-Hub-Signature-256` |

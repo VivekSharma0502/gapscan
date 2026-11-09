@@ -17,11 +17,12 @@ import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWK, PyJWKSet
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from app.core.config import settings
-from app.core.safe_http import SafeHttpError, safe_get
+from app.core.safe_http import SafeHttpError, safe_api_request, safe_get
 from app.models.profile import MAX_EMAIL_LENGTH, MAX_NAME_LENGTH, Profile
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,69 @@ def require_viewer(viewer: Annotated[Viewer | None, Depends(get_viewer)]) -> Vie
             headers={"WWW-Authenticate": "Bearer"},
         )
     return viewer
+
+
+def require_access_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> str:
+    """Return the caller's raw token, for a route that must act as them towards Supabase."""
+    if credentials is None:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            detail="Sign in to continue.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return credentials.credentials
+
+
+class _SupabaseIdentity(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    provider: str
+    # The provider's own user id, set by Supabase when the provider confirmed the sign-in.
+    id: str
+
+
+class _SupabaseUser(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    id: UUID
+    identities: list[_SupabaseIdentity] | None = None
+
+
+def fetch_github_account_id(access_token: str, viewer_id: UUID) -> int | None:
+    """Return the GitHub user id this person signed in with, or None if they never did.
+
+    Security: asks Supabase instead of reading the access token's user_metadata. A user can
+    edit their own user_metadata with an ordinary API call, so a GitHub id or username there
+    would let anyone claim to be anyone. Identities can only come from a completed sign-in.
+    """
+    if not settings.supabase_url or not settings.supabase_publishable_key:
+        raise AuthUnavailableError("SUPABASE_URL or SUPABASE_PUBLISHABLE_KEY is not set")
+    try:
+        response = safe_api_request(
+            "GET",
+            f"{settings.supabase_url}/auth/v1/user",
+            headers={
+                "apikey": settings.supabase_publishable_key,
+                "Authorization": f"Bearer {access_token}",
+            },
+        )
+    except SafeHttpError as exc:
+        raise AuthUnavailableError("could not reach Supabase") from exc
+    if response.status_code != 200 or response.truncated:
+        raise AuthUnavailableError(f"Supabase returned {response.status_code}")
+    try:
+        user = _SupabaseUser.model_validate_json(response.content)
+    except ValidationError:
+        raise AuthUnavailableError("Supabase returned an unexpected response") from None
+    if user.id != viewer_id:
+        raise AuthUnavailableError("Supabase returned a different user")
+
+    for identity in user.identities or []:
+        if identity.provider == "github" and identity.id.isascii() and identity.id.isdigit():
+            return int(identity.id)
+    return None
 
 
 def ensure_profile(session: Session, viewer: Viewer) -> None:

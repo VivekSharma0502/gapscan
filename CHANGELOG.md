@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-11-09: Phase 3, step 3a-2: secure GitHub installation linking
+
+**Added**
+- `POST /api/github/install-url` starts an install with a one-time state, and `POST /api/github/installations/link` finishes it and saves the account's repos. `GET /api/repos` lists them.
+- A `/repositories` page with a Connect GitHub button and repo list, a `/repositories/connect` page that GitHub redirects back to, and "Repositories" in the user menu. Scanning and findings arrive in later steps.
+
+**Security**
+- An `installation_id` in a URL proves nothing, so an installation is only linked when GitHub says its account's numeric id matches the GitHub account the user signed in with. An attacker guessing ids gets the same refusal as for an id that doesn't exist.
+- That GitHub identity comes from asking Supabase, not from the access token's `user_metadata`, which any user can edit about themselves.
+- The state value is random, stored only as a hash, expires in 10 minutes, works once and only for the user who started the install. A failed attempt uses it up.
+- A repo that moved to a new owner gets a new row, so its old findings don't come with it.
+- One GitHub installation can't be attached to two GapScan accounts.
+
+**Decisions**
+- Organizations are refused for now, as agreed in the plan.
+- The callback is a frontend page, because the API's sign-in is a bearer token that a browser redirect can't carry.
+
 ## 2026-11-09: Phase 3, step 3a-1: GitHub App foundations
 
 **Added**
