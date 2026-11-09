@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-09: Phase 3, step 3a-6: Repositories page and dashboard section
+
+**Added**
+- `/repositories` now shows each repo's last scan and finding counts by severity, with Scan now and View findings. Scan status updates by itself while a scan runs.
+- A `/repositories/{id}` page: findings grouped by severity with file, line, commit, masked value and first-found date, a "How to replace it" tab with links to the provider's page and official instructions, and the warning that deleting a file doesn't remove a secret from history.
+- A Repositories section on the dashboard, most urgent first, with a Connect GitHub prompt when empty.
+- `GET /api/repos` now includes each repo's latest scan and counts.
+
+**Security**
+- The repo list returns numbers only, with no files or masked values.
+- "No secrets found" only appears after a finished, complete scan, so a scan that hit a limit or failed can't look like a clean result.
+- Paths from scanned repos are rendered as text, and links out send no referrer, so a provider's site doesn't learn the repo page's address.
+
 ## 2026-11-09: Phase 3, step 3a-5: rotation guides checked against official docs
 
 **Changed**

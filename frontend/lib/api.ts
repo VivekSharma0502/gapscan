@@ -150,12 +150,62 @@ export interface Dashboard {
   recent_scans: ScanSummary[];
 }
 
+export type SeverityCounts = Record<Severity, number>;
+
+export interface RepoLatestScan extends ScanSummary {
+  incomplete_reason: string | null;
+}
+
 export interface Repo {
   id: string;
   full_name: string;
   is_private: boolean;
   account_login: string;
   created_at: string;
+  // Null until the repo has been scanned.
+  latest_scan: RepoLatestScan | null;
+  counts: SeverityCounts;
+}
+
+export interface RepoScanCreated {
+  id: string;
+  status: ScanJobStatus;
+  reused: boolean;
+}
+
+export interface SecretGuide {
+  provider: string;
+  provider_name: string;
+  what_it_means: string;
+  rotate_steps: string[];
+  // Null when it depends on which service the key belongs to.
+  rotate_url: string | null;
+  docs_url: string | null;
+}
+
+export interface RepoFinding {
+  id: string;
+  severity: Severity;
+  title: string;
+  rule_id: string;
+  file_path: string;
+  line: number;
+  commit_sha: string;
+  masked: string;
+  first_seen_at: string;
+  note: string | null;
+  // Null only if the finding's guide has since been removed.
+  guide: SecretGuide | null;
+}
+
+export interface RepoFindings {
+  id: string;
+  full_name: string;
+  is_private: boolean;
+  history_warning: string;
+  latest_scan: RepoLatestScan | null;
+  counts: SeverityCounts;
+  findings: RepoFinding[];
 }
 
 export interface GithubLinkResult {
@@ -310,6 +360,19 @@ export function linkGithubInstallation(link: {
 
 export function listRepos(signal?: AbortSignal): Promise<Repo[]> {
   return request("/api/repos", { signal });
+}
+
+export function startRepoScan(id: string): Promise<RepoScanCreated> {
+  return request(`/api/repos/${encodeURIComponent(id)}/scan`, {
+    method: "POST",
+  });
+}
+
+export function getRepoFindings(
+  id: string,
+  signal?: AbortSignal,
+): Promise<RepoFindings> {
+  return request(`/api/repos/${encodeURIComponent(id)}/findings`, { signal });
 }
 
 export function getDashboard(signal?: AbortSignal): Promise<Dashboard> {

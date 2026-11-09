@@ -8,6 +8,7 @@ import { useEffect } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
 import { DomainSummaryCard } from "@/components/dashboard/domain-summary-card";
+import { RepositoriesSection } from "@/components/dashboard/repositories-section";
 import { ScanRow } from "@/components/dashboard/scan-row";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { getDashboard, type Dashboard, type ScanSummary } from "@/lib/api";
@@ -142,6 +143,7 @@ export function DashboardView() {
               ))}
             </div>
           )}
+          <RepositoriesSection />
           <RecentScans scans={dashboard.data.recent_scans} />
         </>
       )}

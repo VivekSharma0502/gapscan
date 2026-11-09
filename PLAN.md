@@ -127,7 +127,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 | POST | /api/domains/{id}/scan | full scan, verified only |
 | POST | /api/github/install-url | auth. Returns the GitHub install link with a one-time state |
 | POST | /api/github/installations/link | auth. Links an installation only if the state is the user's own and GitHub says their account owns it |
-| GET | /api/repos | auth |
+| GET | /api/repos | auth. Each repo's latest scan and finding counts, no finding details |
 | POST | /api/repos/{id}/scan | auth, 5/min per IP, 10 whole-history scans per repo per hour. Owner only |
 | GET | /api/repos/{id}/findings | auth, owner only. Masked findings by severity, each with how to replace the key |
 | POST | /api/github/webhook | verify `X-Hub-Signature-256` |

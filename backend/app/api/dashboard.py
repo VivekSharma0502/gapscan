@@ -40,7 +40,7 @@ class DashboardOut(BaseModel):
     recent_scans: list[ScanSummary]
 
 
-def _newest_per_group(
+def newest_per_group(
     session: Session, group: Any, limit: int, *conditions: ColumnElement[bool]
 ) -> dict[Any, list[Scan]]:
     """The newest `limit` matching scans for each value of `group`, newest first.
@@ -96,14 +96,14 @@ def get_dashboard(session: SessionDep, viewer: SignedInDep) -> DashboardOut:
         Scan.owner_id == viewer.id,
         Scan.mode == ScanMode.FULL,
     )
-    full_graded = _newest_per_group(session, Scan.domain_id, 2, *full, *graded)
-    full_attempts = _newest_per_group(session, Scan.domain_id, 1, *full)
+    full_graded = newest_per_group(session, Scan.domain_id, 2, *full, *graded)
+    full_attempts = newest_per_group(session, Scan.domain_id, 1, *full)
 
     # Quick scans aren't linked to a domain, so these are found by hostname.
     hostnames = [domain.hostname for domain in domains if domain.verified_at is None]
     quick = (Scan.target.in_(hostnames), Scan.mode == ScanMode.QUICK, readable_by(viewer.id))
-    quick_graded = _newest_per_group(session, Scan.target, 1, *quick, *graded)
-    quick_attempts = _newest_per_group(session, Scan.target, 1, *quick)
+    quick_graded = newest_per_group(session, Scan.target, 1, *quick, *graded)
+    quick_attempts = newest_per_group(session, Scan.target, 1, *quick)
 
     def summary_of(scans: list[Scan]) -> ScanSummary | None:
         return scan_summary(scans[0], now) if scans else None

@@ -2,7 +2,7 @@
 
 import logging
 import secrets
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Annotated
@@ -14,6 +14,7 @@ from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
+from app.api.dashboard import newest_per_group
 from app.api.scans import (
     ScanSummary,
     SessionDep,
@@ -110,12 +111,19 @@ class RepoScanCreated(BaseModel):
     reused: bool
 
 
+class RepoLatestScan(ScanSummary):
+    incomplete_reason: str | None
+
+
 class RepoOut(BaseModel):
     id: UUID
     full_name: str
     is_private: bool
     account_login: str
     created_at: datetime
+    latest_scan: RepoLatestScan | None
+    # Numbers only. A list has no need for what was found or where.
+    counts: dict[Severity, int]
 
 
 class RepoFindingOut(BaseModel):
@@ -134,10 +142,6 @@ class RepoFindingOut(BaseModel):
     note: str | None
     # None only if a stored finding's guide has since been removed.
     guide: SecretGuide | None
-
-
-class RepoLatestScan(ScanSummary):
-    incomplete_reason: str | None
 
 
 class RepoFindingsOut(BaseModel):
@@ -493,12 +497,27 @@ def list_repo_findings(repo_id: UUID, session: SessionDep, viewer: SignedInDep) 
 
 @router.get("/repos", response_model=list[RepoOut])
 def list_repos(session: SessionDep, viewer: SignedInDep) -> list[RepoOut]:
-    rows = session.exec(
-        select(Repo, GithubInstallation.account_login)
-        .join(GithubInstallation, Repo.installation_id == GithubInstallation.id)
-        .where(Repo.owner_id == viewer.id)
-        .order_by(Repo.full_name)
+    rows = list(
+        session.exec(
+            select(Repo, GithubInstallation.account_login)
+            .join(GithubInstallation, Repo.installation_id == GithubInstallation.id)
+            .where(Repo.owner_id == viewer.id)
+            .order_by(Repo.full_name)
+        )
     )
+    repo_ids = [repo.id for repo, _ in rows]
+    # Security: owner_id as well, so a scan can't be shown to anyone but its owner.
+    latest = newest_per_group(
+        session, Scan.repo_id, 1, Scan.repo_id.in_(repo_ids), Scan.owner_id == viewer.id
+    )
+    counts: defaultdict[UUID, Counter[Severity]] = defaultdict(Counter)
+    for repo_id, severity, total in session.exec(
+        select(FindingRecord.repo_id, FindingRecord.severity, func.count())
+        .where(FindingRecord.repo_id.in_(repo_ids))
+        .group_by(FindingRecord.repo_id, FindingRecord.severity)
+    ):
+        counts[repo_id][severity] = total
+
     return [
         RepoOut(
             id=repo.id,
@@ -506,6 +525,8 @@ def list_repos(session: SessionDep, viewer: SignedInDep) -> list[RepoOut]:
             is_private=repo.is_private,
             account_login=account_login,
             created_at=repo.created_at,
+            latest_scan=_latest_scan_out(latest[repo.id][0]) if latest[repo.id] else None,
+            counts={severity: counts[repo.id][severity] for severity in Severity},
         )
         for repo, account_login in rows
     ]

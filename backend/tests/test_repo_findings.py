@@ -349,3 +349,44 @@ def test_supabase_legacy_steps_replace_both_keys_before_deactivating() -> None:
 
 def test_stripe_steps_warn_that_expiring_now_breaks_the_app() -> None:
     assert any("Now stops" in step for step in GUIDES["secrets.stripe"].rotate_steps)
+
+
+# --- the repo list ---
+
+
+def test_repo_list_has_counts_and_latest_scan(client: TestClient, db_engine: Engine) -> None:
+    owner, repo = seed(db_engine)
+    add_scan(db_engine, owner, repo, created_at=utc_now() - timedelta(hours=1))
+    newest = add_scan(db_engine, owner, repo, incomplete_reason="Too big to scan.")
+    add_finding(db_engine, newest, repo, "private-key")
+    add_finding(db_engine, newest, repo, "aws-access-token")
+    add_finding(db_engine, newest, repo, "generic-api-key")
+    sign_in(owner)
+
+    item = client.get("/api/repos").json()[0]
+
+    assert item["counts"] == {"critical": 2, "high": 0, "medium": 1, "low": 0, "info": 0}
+    assert item["latest_scan"]["id"] == str(newest)
+    assert item["latest_scan"]["incomplete_reason"] == "Too big to scan."
+
+
+def test_repo_list_sends_no_finding_details(client: TestClient, db_engine: Engine) -> None:
+    owner, repo = seed(db_engine)
+    scan = add_scan(db_engine, owner, repo)
+    add_finding(db_engine, scan, repo, file_path="very-private-path.py")
+    sign_in(owner)
+
+    text = json.dumps(client.get("/api/repos").json())
+
+    assert "very-private-path" not in text
+    assert "AKIA" not in text
+
+
+def test_never_scanned_repo_in_the_list(client: TestClient, db_engine: Engine) -> None:
+    owner, _ = seed(db_engine)
+    sign_in(owner)
+
+    item = client.get("/api/repos").json()[0]
+
+    assert item["latest_scan"] is None
+    assert sum(item["counts"].values()) == 0
