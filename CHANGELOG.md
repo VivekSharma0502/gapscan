@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3a complete
+
+GitHub repo secret scanning is finished and verified end to end: installing the app, linking it to the signed-in account, a real push through the signed webhook and worker, and the Repositories and findings pages in the browser.
+
+**Docs**
+- `PLAN.md` marks step 3a done and lists what's left in Phase 3 (BaaS checks and correlation).
+- The README has a Repo scanning section covering how to use it, the caps, what to check when a webhook returns 401, and how to set up a production GitHub App.
+
+**Known limits**
+- Personal accounts only. Organization installs need GitHub's user authorization during install.
+- A finding can't be marked as rotated yet, so it stays listed until a complete whole-history scan no longer finds it.
+- The worker has no Docker image yet. Production needs `git` and `gitleaks` installed on it.
+
 ## 2026-11-09: Phase 3, step 3a-6: Repositories page and dashboard section
 
 **Added**

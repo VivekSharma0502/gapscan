@@ -43,6 +43,7 @@ Don't reinvent engines: use **gitleaks** for secrets; write our own checks for h
     /core          config, auth, safe_http (SSRF guard), rate limit
     /checks        one file per check group (tls.py, headers.py, cookies.py, dns_email.py, exposure.py, cms.py, baas.py)
     /models        SQLModel tables
+    /repos         repo secret scanning: git + gitleaks runner, report parsing, rotation guides
     /workers       Celery app + tasks
     /reports       PDF templates
   /tests
@@ -79,13 +80,20 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - Dashboard: domains, latest score, score history chart, scan history
 
 ### Phase 3 — Repos + BaaS + correlation (Week 3–4)
-- GitHub App: install → list repos → scan with gitleaks; webhook on `push` scans new commits
-- Store only masked secrets + file/line/commit. gitleaks runs with `--redact`, so the mask is a fixed per-provider prefix (`AKIA****`) and no characters of the real secret are kept. Findings are deduped per repo on gitleaks' fingerprint, so a rescan keeps the first-seen date
+
+**Step 3a: GitHub repo secret scanning. Done, verified end to end on 2026-11-10.**
+- [x] GitHub App: install → list repos → scan with gitleaks; webhook on `push` scans new commits
+- [x] Installation linking with a one-time state, checked against the GitHub account the user signed in with
+- [x] Store only masked secrets + file/line/commit. gitleaks runs with `--redact`, so the mask is a fixed per-provider prefix (`AKIA****`) and no characters of the real secret are kept. Findings are deduped per repo on gitleaks' fingerprint, so a rescan keeps the first-seen date
+- [x] Rotation guides per provider, checked against each provider's official docs and linked from each finding
+- [x] Repositories page, findings page and dashboard section
 - Personal-account installs only for now. Organization installs need GitHub's user authorization during install (later)
-- BaaS checks (verified domains only):
+
+**Still to do**
+- [ ] BaaS checks (verified domains only):
   - Firebase config in JS bundle → RTDB `/.json` readable? Firestore/Storage rules open?
   - Supabase URL + anon key in bundle → tables readable without RLS?
-- Correlation: repo finding mentions a project/domain the user owns → link findings, raise severity if live exposure confirmed
+- [ ] Correlation: repo finding mentions a project/domain the user owns → link findings, raise severity if live exposure confirmed
 
 ### Phase 4 — Monitoring + reports (Week 5)
 - Celery Beat scheduled rescans (weekly free / daily paid)

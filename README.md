@@ -86,7 +86,7 @@ To receive webhooks locally, keep this running in a fourth terminal: `npx smee-c
 
 ## Run
 
-Use three terminals.
+Use three terminals, plus a fourth for smee if you want pushes to trigger repo scans.
 
 ```powershell
 # Terminal 1: API on http://localhost:8000
@@ -107,6 +107,20 @@ Open http://localhost:3000 and enter a domain to run a quick scan.
 The worker runs the scans, so without it they stay queued and are marked failed after 5 minutes. `--pool=solo` is required on Windows, where Celery's default pool doesn't work, and runs one scan at a time. Restart the worker after changing its code, because it doesn't reload. `-Q celery,repo_scans` makes it serve website scans and repo scans. Without it, repo scans stay queued. Because `--pool=solo` runs one job at a time, a long repo scan delays website scans locally.
 
 `--reload` only watches code, so restart the API after editing `.env`.
+
+## Repo scanning
+
+Needs the sign-in and GitHub App setup above, and `git` and `gitleaks` on the worker's PATH. Sign in with GitHub using the account that owns the repos, because an installation is only linked when its account matches the one you signed in with. Personal accounts only for now.
+
+1. Open <http://localhost:3000/repositories>, choose **Connect GitHub** and pick the repositories to allow.
+2. Choose **Scan now** to check a repo's whole git history. Findings appear under **View findings**, grouped by severity, with steps for replacing each key.
+3. With smee running, each push scans only its new commits. A repo's first scan, a force-push or a missed push covers the whole history.
+
+Scans are capped at 500 MB reported size, 1 GB on disk, 3 minutes to clone, 5 minutes to search, 5 MB per file and 1,000 findings. A scan that hits a cap finishes as incomplete and says why.
+
+If a webhook returns 401:
+- Restart the API if you changed `GITHUB_WEBHOOK_SECRET`, and check it matches the secret on GitHub. If uvicorn reports the port is in use, an old process is still answering on it.
+- smee re-encodes the JSON it forwards, so a delivery containing escapes like `é` or `\/` can fail its signature check locally. This only affects smee, because in production GitHub posts straight to the API.
 
 ## Tests and lint
 
@@ -133,3 +147,5 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --forwarded-allow-ips="<your pro
 - Don't use `*` unless the proxy is the only way to reach the app. Otherwise a client can forge `X-Forwarded-For` and get around the limit.
 
 Run the worker without `--pool=solo` on Linux. The default pool runs scans in parallel and enforces the task time limit. In production, run a separate worker with `-Q repo_scans` so repo scans can't hold up website scans, and install `git` and `gitleaks` on it.
+
+For repo scanning in production, create a separate GitHub App with its own key and webhook secret. Point its webhook at `https://<your API>/api/github/webhook` and its Setup URL at `https://<your site>/repositories/connect`, and allow it to be installed on any account.
