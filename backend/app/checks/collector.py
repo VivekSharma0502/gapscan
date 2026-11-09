@@ -8,9 +8,12 @@ import ipaddress
 
 from app.checks.base import (
     BLOCKED_STATUSES,
+    BotProtection,
     Input,
     ScanContext,
     StepCallback,
+    bot_protection,
+    bot_protection_label,
     shows_real_page,
 )
 from app.checks.domains import registrable_domain, shared_platform_suffix
@@ -55,18 +58,27 @@ def _unreachable_reason(tls: TlsProbe | None, error: SafeHttpError) -> str:
     return "We could not reach the site over HTTPS."
 
 
-def _fetch_homepage(hostname: str, tls: TlsProbe | None) -> tuple[SafeResponse | None, str | None]:
+def _fetch_homepage(
+    hostname: str, tls: TlsProbe | None
+) -> tuple[SafeResponse | None, str | None, BotProtection | None]:
     try:
         response = safe_get(f"https://{hostname}/")
     except SafeHttpError as exc:
-        return None, _unreachable_reason(tls, exc)
-    problem = _status_problem(response.status_code)
-    return (None, problem) if problem is not None else (response, None)
+        return None, _unreachable_reason(tls, exc), None
+    problem = _status_problem(response.status_code, bot_protection(response))
+    if problem is not None:
+        return None, problem, bot_protection(response)
+    return response, None, None
 
 
-def _status_problem(status_code: int) -> str | None:
+def _status_problem(status_code: int, platform: BotProtection | None = None) -> str | None:
     if shows_real_page(status_code):
         return None
+    if platform is not None:
+        return (
+            f"{bot_protection_label(platform)} blocked our request, so we couldn't see "
+            f"the real page (HTTP {status_code})."
+        )
     if status_code in BLOCKED_STATUSES:
         return (
             "Blocked by bot protection or a firewall (e.g. Cloudflare), so we couldn't see "
@@ -144,7 +156,7 @@ def collect_context(hostname: str, *, on_step: StepCallback | None = None) -> Sc
         reasons[Input.TLS] = "We could not complete a TLS connection."
 
     start_step("https_fetch")
-    https, https_reason = _fetch_homepage(name, tls)
+    https, https_reason, blocked_by = _fetch_homepage(name, tls)
 
     start_step("http_fetch")
     try:
@@ -158,7 +170,7 @@ def collect_context(hostname: str, *, on_step: StepCallback | None = None) -> Sc
     # Only a definite "no HTTPS" counts. After a timeout, HTTPS may well exist, and reading
     # the HTTP page instead could score the wrong thing.
     if https is None and _has_no_https(tls) and http is not None:
-        http_problem = _status_problem(http.status_code)
+        http_problem = _status_problem(http.status_code, bot_protection(http))
         if http_problem is None:
             homepage_via_http = True
             https_reason = None
@@ -184,5 +196,6 @@ def collect_context(hostname: str, *, on_step: StepCallback | None = None) -> Sc
         skip_reasons=reasons,
         not_applicable=frozenset(not_applicable),
         homepage_via_http=homepage_via_http,
+        blocked_by=blocked_by,
         **dns_fields,
     )

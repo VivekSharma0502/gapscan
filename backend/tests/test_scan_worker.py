@@ -10,6 +10,7 @@ from app.checks import active_collector, runner
 from app.checks.base import (
     BaasDiscovery,
     BaasKind,
+    BotProtection,
     Category,
     DiscoveredBackend,
     Finding,
@@ -744,3 +745,56 @@ def test_scripts_are_read_before_any_sensitive_path_is_requested(
     run_full_scan(str(add_full(db_engine, owner, add_domain(db_engine, owner))))
 
     assert calls == ["scripts", "probes"]
+
+
+# --- naming the platform in a report ---
+
+BLOCKED_FILE = OwnershipResult(
+    None,
+    (
+        MethodFailure(VerificationMethod.DNS, FailureCode.TXT_NOT_FOUND, "no", True),
+        MethodFailure(
+            VerificationMethod.FILE,
+            FailureCode.FILE_BLOCKED,
+            "blocked",
+            False,
+            BotProtection.VERCEL,
+        ),
+    ),
+)
+
+
+@pytest.mark.usefixtures("collected", "probe_net")
+def test_blocked_verification_file_says_so_and_keeps_the_domain_verified(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proof(monkeypatch, BLOCKED_FILE)
+    owner = uuid4()
+    domain_id = add_domain(db_engine, owner)
+    scan_id = add_full(db_engine, owner, domain_id)
+
+    run_full_scan(str(scan_id))
+
+    scan = load(db_engine, scan_id)
+    reasons = {item["reason"] for item in active_skips(db_engine, scan_id)}
+    assert len(reasons) == 1
+    reason = reasons.pop()
+    assert "Vercel's bot protection blocked our request for your verification file" in reason
+    assert "couldn't re-confirm" not in reason
+    assert scan.blocked_by is BotProtection.VERCEL
+    with Session(db_engine) as session:
+        assert session.get_one(Domain, domain_id).verified_at is not None
+
+
+@pytest.mark.usefixtures("collected", "probe_net")
+def test_ordinary_failure_to_reconfirm_keeps_its_wording(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proof(monkeypatch, UNKNOWN)
+    owner = uuid4()
+    scan_id = add_full(db_engine, owner, add_domain(db_engine, owner))
+
+    run_full_scan(str(scan_id))
+
+    assert load(db_engine, scan_id).blocked_by is None
+    assert all("couldn't re-confirm" in i["reason"] for i in active_skips(db_engine, scan_id))

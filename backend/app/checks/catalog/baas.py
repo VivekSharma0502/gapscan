@@ -97,10 +97,9 @@ TEXT: dict[str, CheckText] = {
             how_to_fix=(
                 "The list above says why each script was skipped. If it says bot protection "
                 "blocked it, GapScan won't try to get past that, because it's your site's choice. "
-                "To let scans through, add a rule in your host's firewall that allows requests "
-                "whose user agent contains GapScanBot, such as a Bypass rule in the Vercel "
-                "Firewall, then scan again. A user agent can be faked, so remove the rule when "
-                "you're done if you don't scan regularly."
+                "To let scans through, add a firewall rule that allows requests whose user agent "
+                "contains GapScanBot, then scan again. A user agent can be faked, so remove the "
+                "rule when you're done if you don't scan regularly."
             ),
             backend=BackendFix(label="GapScan"),
         ),

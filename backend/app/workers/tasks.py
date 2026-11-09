@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import UUID
 
@@ -12,7 +12,13 @@ from sqlmodel import select, update
 from app.checks.active_collector import attach_probes, without_probes
 from app.checks.baas_collector import discover_backends
 from app.checks.baas_probes import probe_backends
-from app.checks.base import BaasDiscovery, Category, DiscoveredBackend
+from app.checks.base import (
+    BaasDiscovery,
+    BotProtection,
+    Category,
+    DiscoveredBackend,
+    bot_protection_label,
+)
 from app.checks.collector import COLLECT_STEPS, collect_context
 from app.checks.ownership import prove_ownership
 from app.checks.runner import ScanReport, ScanStatus, run_checks, selected_checks
@@ -111,6 +117,7 @@ def _save_report(scan_id: UUID, report: ScanReport, total: int, steps: Sequence[
                 grade_cap_reason=report.grade_cap_reason,
                 score_label=report.score_label,
                 incomplete_reason=report.incomplete_reason,
+                blocked_by=report.blocked_by,
                 skipped_json=[item.model_dump() for item in report.skipped],
                 progress_json=_progress(total, total, None, steps),
                 finished_at=utc_now(),
@@ -133,7 +140,13 @@ def _save_report(scan_id: UUID, report: ScanReport, total: int, steps: Sequence[
         session.commit()
 
 
-def _ownership_problem(scan_id: UUID) -> str | None:
+@dataclass(frozen=True)
+class _OwnershipProblem:
+    reason: str
+    blocked_by: BotProtection | None = None
+
+
+def _ownership_problem(scan_id: UUID) -> _OwnershipProblem | None:
     """Return why active checks must not run, or None once ownership is confirmed.
 
     Security: asked here as well as in the API, and re-proven on every scan, because a domain
@@ -148,15 +161,21 @@ def _ownership_problem(scan_id: UUID) -> str | None:
             or domain.owner_id != scan.owner_id
             or domain.hostname != scan.target
         ):
-            return _NOT_VERIFIED_REASON
+            return _OwnershipProblem(_NOT_VERIFIED_REASON)
         domain_id, hostname, token = domain.id, domain.hostname, domain.verify_token
         accept_legacy = domain.accepts_legacy_verify_names
 
     result = prove_ownership(hostname, token, accept_legacy=accept_legacy)
     if result.proven:
         return None
+    if result.blocked_by is not None:
+        return _OwnershipProblem(
+            f"{bot_protection_label(result.blocked_by)} blocked our request for your "
+            "verification file, so these checks did not run. Your domain is still verified.",
+            result.blocked_by,
+        )
     if not result.definitely_gone:
-        return _PROOF_UNKNOWN_REASON
+        return _OwnershipProblem(_PROOF_UNKNOWN_REASON)
     with new_session() as session:
         session.exec(
             update(Domain)
@@ -164,7 +183,7 @@ def _ownership_problem(scan_id: UUID) -> str | None:
             .values(verified_at=None, verified_method=None)
         )
         session.commit()
-    return _PROOF_GONE_REASON
+    return _OwnershipProblem(_PROOF_GONE_REASON)
 
 
 def initial_repo_progress() -> dict[str, Any]:
@@ -380,6 +399,8 @@ def run_full_scan(scan_id: str) -> None:
         on_step(OWNERSHIP_STEP)
         problem = _ownership_problem(job_id)
         context = collect_context(target, on_step=on_step)
+        if problem is not None:
+            context = replace(context, blocked_by=context.blocked_by or problem.blocked_by)
         # Scripts come first. A burst of requests for sensitive paths can set off a site's
         # bot protection, which would then block the ordinary script requests too.
         on_step(BAAS_STEP)
@@ -387,7 +408,7 @@ def run_full_scan(scan_id: str) -> None:
             context = discover_backends(context)
             _remember_backends(job_id, context.baas)
         on_step(PROBE_STEP)
-        context = without_probes(context, problem) if problem else attach_probes(context)
+        context = without_probes(context, problem.reason) if problem else attach_probes(context)
         on_step(BAAS_PROBE_STEP)
         if not problem:
             context = probe_backends(context, _confirmed_backends(job_id))

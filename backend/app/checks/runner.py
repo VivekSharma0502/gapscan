@@ -7,7 +7,15 @@ from pydantic import BaseModel
 
 # Imported for their side effect: each module registers its checks with the registry.
 from app.checks import baas, cms, cookies, dns_email, exposure, headers, tls  # noqa: F401
-from app.checks.base import Finding, Input, ScanContext, Severity, SkipCheck, StepCallback
+from app.checks.base import (
+    BotProtection,
+    Finding,
+    Input,
+    ScanContext,
+    Severity,
+    SkipCheck,
+    StepCallback,
+)
 from app.checks.registry import CheckSpec, all_checks
 from app.checks.scoring import calculate_score, final_grade
 
@@ -47,6 +55,8 @@ class ScanReport(BaseModel):
     score_label: str | None
     findings: list[Finding]
     skipped: list[SkippedCheck]
+    # Whose bot protection stopped part of this scan.
+    blocked_by: BotProtection | None = None
 
 
 def _missing_input(spec: CheckSpec, ctx: ScanContext) -> Input | None:
@@ -113,6 +123,7 @@ def run_checks(
             score_label=None,
             findings=findings,
             skipped=skipped,
+            blocked_by=ctx.blocked_by,
         )
 
     score = calculate_score(findings)
@@ -128,4 +139,5 @@ def run_checks(
         score_label=_partial_label(failed_count) if failed_count else None,
         findings=findings,
         skipped=skipped,
+        blocked_by=ctx.blocked_by,
     )

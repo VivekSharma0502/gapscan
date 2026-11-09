@@ -19,6 +19,45 @@ BLOCKED_STATUSES = frozenset({403, 429, 503})
 StepCallback = Callable[[str], None]
 
 
+class BotProtection(StrEnum):
+    VERCEL = "vercel"
+    CLOUDFLARE = "cloudflare"
+
+
+@dataclass(frozen=True)
+class BotProtectionInfo:
+    name: str
+    # The platform's own instructions for letting a trusted client through.
+    help_url: str
+
+
+BOT_PROTECTION_INFO = {
+    BotProtection.VERCEL: BotProtectionInfo(
+        "Vercel", "https://vercel.com/docs/vercel-firewall/vercel-waf/custom-rules"
+    ),
+    BotProtection.CLOUDFLARE: BotProtectionInfo(
+        "Cloudflare", "https://developers.cloudflare.com/waf/custom-rules/skip/"
+    ),
+}
+
+_BOT_PROTECTION_HEADERS = {
+    "x-vercel-mitigated": BotProtection.VERCEL,
+    "cf-mitigated": BotProtection.CLOUDFLARE,
+}
+
+
+def bot_protection(response: SafeResponse) -> BotProtection | None:
+    """Return the platform whose bot protection answered instead of the site, if any."""
+    for header, platform in _BOT_PROTECTION_HEADERS.items():
+        if header in response.headers:
+            return platform
+    return None
+
+
+def bot_protection_label(platform: BotProtection) -> str:
+    return f"{BOT_PROTECTION_INFO[platform].name}'s bot protection"
+
+
 def shows_real_page(status_code: int) -> bool:
     """Whether a response carries the site's own headers.
 
@@ -235,6 +274,8 @@ class ScanContext:
     # None unless ownership was confirmed for this scan.
     baas: BaasDiscovery | None = None
     baas_probes: BaasProbes | None = None
+    # Whose bot protection stopped part of this scan, so the report can say how to allow it.
+    blocked_by: BotProtection | None = None
     # Set when the hostname sits under a domain shared by many customers, like vercel.app.
     shared_platform_suffix: str | None = None
     # Why an input is missing, shown to the user next to the checks it prevented.

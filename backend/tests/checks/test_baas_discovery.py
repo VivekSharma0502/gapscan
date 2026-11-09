@@ -4,6 +4,7 @@ import base64
 import json
 import os
 from typing import Any
+from urllib.parse import urlparse
 
 import pytest
 
@@ -23,8 +24,10 @@ from app.checks.baas_discovery import (
     find_exposed_keys,
 )
 from app.checks.base import (
+    BOT_PROTECTION_INFO,
     BaasDiscovery,
     BaasKind,
+    BotProtection,
     Category,
     DiscoveredBackend,
     ExposedServiceKey,
@@ -582,7 +585,7 @@ def test_checkpoint_on_the_script_is_recorded_as_the_reason(fake_get: FakeGet) -
 
     assert result.scripts_read == 0
     assert result.scripts_failed == 1
-    assert result.skipped == (SkippedScript("/app.js", "blocked by the site's bot protection"),)
+    assert result.skipped == (SkippedScript("/app.js", "blocked by Vercel's bot protection"),)
 
 
 def test_checkpoint_stops_the_remaining_script_requests(fake_get: FakeGet) -> None:
@@ -599,7 +602,7 @@ def test_checkpoint_on_a_script_can_not_be_reported_clear(fake_get: FakeGet) -> 
     fake_get.default = CHECKPOINT
     ctx = discover_backends(static_site())
 
-    with pytest.raises(SkipCheck, match="blocked by the site's bot protection"):
+    with pytest.raises(SkipCheck, match="blocked by Vercel's bot protection"):
         supabase_service_key(ctx)
 
 
@@ -608,8 +611,9 @@ def test_checkpoint_on_the_homepage_is_not_reported_as_nothing_found(fake_get: F
 
     assert ctx.baas is None
     assert fake_get.urls == []
-    assert "bot protection" in ctx.skip_reasons[Input.BAAS]
-    assert "bot protection" in ctx.skip_reasons[Input.BAAS_PROBES]
+    assert "Vercel's bot protection" in ctx.skip_reasons[Input.BAAS]
+    assert "Vercel's bot protection" in ctx.skip_reasons[Input.BAAS_PROBES]
+    assert ctx.blocked_by is BotProtection.VERCEL
 
 
 def test_config_in_an_inline_script_block_is_found(fake_get: FakeGet) -> None:
@@ -679,3 +683,44 @@ def test_limits_are_named_in_the_reason(fake_get: FakeGet) -> None:
 
     assert result.skipped[-1].reason == f"over the {MAX_BUNDLE_SCRIPTS}-script limit"
     assert result.scripts_failed == 0
+
+
+# --- naming the platform ---
+
+
+@pytest.mark.parametrize(
+    ("header", "platform", "label"),
+    [
+        ("x-vercel-mitigated", BotProtection.VERCEL, "Vercel's bot protection"),
+        ("cf-mitigated", BotProtection.CLOUDFLARE, "Cloudflare's bot protection"),
+    ],
+)
+def test_platform_is_named_from_its_header(
+    fake_get: FakeGet, header: str, platform: BotProtection, label: str
+) -> None:
+    fake_get.default = response(status=403, headers={header: "challenge"})
+
+    ctx = discover_backends(page("/a.js"))
+
+    assert ctx.blocked_by is platform
+    assert ctx.baas is not None
+    assert ctx.baas.skipped[0].reason == f"blocked by {label}"
+
+
+def test_plain_403_names_no_platform(fake_get: FakeGet) -> None:
+    fake_get.default = response(status=403)
+
+    ctx = discover_backends(page("/a.js"))
+
+    assert ctx.blocked_by is None
+    assert ctx.baas is not None
+    assert ctx.baas.skipped[0].reason == "refused (HTTP 403)"
+
+
+@pytest.mark.parametrize("platform", list(BotProtection))
+def test_every_platform_has_an_official_help_link(platform: BotProtection) -> None:
+    info = BOT_PROTECTION_INFO[platform]
+
+    assert info.name
+    assert urlparse(info.help_url).scheme == "https"
+    assert urlparse(info.help_url).hostname in {"vercel.com", "developers.cloudflare.com"}

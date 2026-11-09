@@ -10,7 +10,8 @@ import { ScoreGauge } from "@/components/scan/score-gauge";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useStartScan } from "@/hooks/use-start-scan";
-import type { Finding, Platform, Scan } from "@/lib/api";
+import type { BotProtectionHelp, Finding, Platform, Scan } from "@/lib/api";
+import { PRODUCT_NAME } from "@/lib/product";
 import { SEVERITIES, SEVERITY_STYLES } from "@/lib/severity";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +62,32 @@ function ActiveChecksNotice({ scan }: { scan: Scan }) {
           {reason}
         </p>
       ))}
+    </section>
+  );
+}
+
+function BotProtectionNotice({ help }: { help: BotProtectionHelp }) {
+  const bot = `${PRODUCT_NAME.replace(" ", "")}Bot`;
+
+  return (
+    <section className="flex flex-col items-start gap-2 rounded-xl bg-card p-6 ring-1 ring-foreground/10">
+      <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+        <TriangleAlert className="size-4 text-muted-foreground" aria-hidden />
+        {help.name}&apos;s bot protection stopped this scan
+      </h2>
+      <p className="text-sm text-pretty text-muted-foreground">
+        We don&apos;t try to get past it, because that&apos;s your site&apos;s
+        choice. To let scans through, add a firewall rule that allows requests
+        whose user agent contains {bot}, then scan again.
+      </p>
+      <a
+        href={help.help_url}
+        target="_blank"
+        rel="noreferrer"
+        className="text-sm underline underline-offset-4"
+      >
+        How to allow {bot} on {help.name}
+      </a>
     </section>
   );
 }
@@ -224,6 +251,9 @@ export function ScanResults({ scan }: { scan: Scan }) {
   return (
     <div className="flex animate-in flex-col gap-10 duration-300 fade-in">
       <ScoreSummary scan={scan} />
+      {scan.bot_protection && (
+        <BotProtectionNotice help={scan.bot_protection} />
+      )}
       <ActiveChecksNotice scan={scan} />
 
       {shown > 0 && (

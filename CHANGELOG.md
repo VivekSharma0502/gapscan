@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3b: name the platform blocking a scan
+
+**Changed**
+- Reports now name the platform when its bot protection stops a scan, from the `x-vercel-mitigated` or `cf-mitigated` header, and link to that platform's instructions for allowing GapScanBot. Run `alembic upgrade head`, and restart the worker.
+- When bot protection blocks the verification file, the report says that instead of "We couldn't re-confirm that you own this domain", and adds that the domain is still verified. Verifying from My domains shows the same reason.
+
+**Tests**
+- Firebase checks are covered end to end with fixtures, from a site's script through confirmation to the finding.
+
 ## 2026-11-10: Phase 3, step 3b fix: bot protection and skipped scripts
 
 **Fixed**

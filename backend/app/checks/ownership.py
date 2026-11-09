@@ -4,7 +4,12 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 
-from app.checks.base import BLOCKED_STATUSES
+from app.checks.base import (
+    BLOCKED_STATUSES,
+    BotProtection,
+    bot_protection,
+    bot_protection_label,
+)
 from app.checks.exposure import looks_like_html
 from app.core.safe_http import (
     OffHostRedirectError,
@@ -49,6 +54,7 @@ class FailureCode(StrEnum):
     FILE_MISMATCH = "file_mismatch"
     FILE_REDIRECTED = "file_redirected"
     FILE_UNREACHABLE = "file_unreachable"
+    FILE_BLOCKED = "file_blocked"
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,8 @@ class MethodFailure:
     message: str
     # True when the proof is really absent, False when we just couldn't find out.
     definite: bool
+    # Set when bot protection answered instead of the site.
+    blocked_by: BotProtection | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +78,13 @@ class OwnershipResult:
     @property
     def proven(self) -> bool:
         return self.method is not None
+
+    @property
+    def blocked_by(self) -> BotProtection | None:
+        for failure in self.failures + self.legacy_failures:
+            if failure.blocked_by is not None:
+                return failure.blocked_by
+        return None
 
     @property
     def definitely_gone(self) -> bool:
@@ -143,6 +158,17 @@ def _check_file(hostname: str, token: str, names: VerificationNames) -> MethodFa
     except SafeHttpError:
         return unreachable
 
+    platform = bot_protection(response)
+    if platform is not None:
+        # Security for users: says nothing about the file, so it can't cost them their proof.
+        return MethodFailure(
+            VerificationMethod.FILE,
+            FailureCode.FILE_BLOCKED,
+            f"{bot_protection_label(platform)} blocked our request for {url}. Allow GapScanBot "
+            "in your firewall, then try again.",
+            definite=False,
+            blocked_by=platform,
+        )
     if response.status_code in BLOCKED_STATUSES or response.status_code >= 500:
         return unreachable
     if response.status_code != 200:

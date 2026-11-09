@@ -12,7 +12,6 @@ from app.checks.active_collector import (
     allowed_probe_hosts,
     gave_no_real_answer,
     same_origin_script_paths,
-    was_challenged,
 )
 from app.checks.baas_discovery import find_backends, find_exposed_keys
 from app.checks.base import (
@@ -22,6 +21,8 @@ from app.checks.base import (
     Input,
     ScanContext,
     SkippedScript,
+    bot_protection,
+    bot_protection_label,
     shows_real_page,
 )
 from app.checks.exposure import looks_like_html
@@ -37,10 +38,7 @@ MAX_BACKENDS = 10
 
 _HOMEPAGE_LOCATION = "your homepage"
 
-_BLOCKED_HOMEPAGE_REASON = (
-    "The site's bot protection blocked our request, so its scripts couldn't be read."
-)
-_BOT_PROTECTION = "blocked by the site's bot protection"
+_BLOCKED_HOMEPAGE_REASON = "Our request was blocked, so the site's scripts couldn't be read."
 _NOT_REQUESTED = "not requested, because bot protection was already blocking the site"
 _REDIRECTED = "redirected off the site"
 _UNREACHABLE = "couldn't be fetched"
@@ -64,8 +62,9 @@ def _text(content: bytes) -> str:
 
 def _why_unusable(response: SafeResponse) -> _Skip | None:
     """Return why this answer isn't the script, or None if it is."""
-    if was_challenged(response):
-        return _Skip(_BOT_PROTECTION, can_hide_a_key=True)
+    platform = bot_protection(response)
+    if platform is not None:
+        return _Skip(f"blocked by {bot_protection_label(platform)}", can_hide_a_key=True)
     if gave_no_real_answer(response) or response.status_code in (401, 403):
         return _Skip(f"refused (HTTP {response.status_code})", can_hide_a_key=True)
     if response.status_code != 200:
@@ -97,12 +96,19 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
     if homepage_response is None:
         return ctx
     # A challenge page has no scripts, and "found nothing" would be a false all-clear.
-    if was_challenged(homepage_response) or not shows_real_page(homepage_response.status_code):
-        reasons = {
-            Input.BAAS: _BLOCKED_HOMEPAGE_REASON,
-            Input.BAAS_PROBES: _BLOCKED_HOMEPAGE_REASON,
-        }
-        return replace(ctx, skip_reasons={**ctx.skip_reasons, **reasons})
+    platform = bot_protection(homepage_response)
+    if platform is not None or not shows_real_page(homepage_response.status_code):
+        reason = (
+            f"{bot_protection_label(platform)} blocked our request, so the site's scripts "
+            "couldn't be read."
+            if platform is not None
+            else _BLOCKED_HOMEPAGE_REASON
+        )
+        return replace(
+            ctx,
+            skip_reasons={**ctx.skip_reasons, Input.BAAS: reason, Input.BAAS_PROBES: reason},
+            blocked_by=ctx.blocked_by or platform,
+        )
 
     allowed = allowed_probe_hosts(ctx.hostname)
     scheme = "http" if ctx.homepage_via_http else "https"
@@ -117,6 +123,7 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
     )
     skipped: list[SkippedScript] = []
     read, failed, total_bytes = 0, 0, 0
+    blocked_by = ctx.blocked_by
     blocked = False
 
     def skip(path: str, reason: _Skip) -> None:
@@ -147,7 +154,9 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
         if unusable is not None:
             skip(path, unusable)
             # The site has asked for automated traffic to stop, so no more is sent.
-            blocked = was_challenged(response)
+            challenged_by = bot_protection(response)
+            blocked = challenged_by is not None
+            blocked_by = blocked_by or challenged_by
             continue
 
         total_bytes += len(response.content)
@@ -169,4 +178,5 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
             scripts_failed=failed,
             skipped=tuple(skipped),
         ),
+        blocked_by=blocked_by,
     )

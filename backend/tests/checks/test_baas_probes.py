@@ -6,9 +6,10 @@ from typing import Any
 
 import pytest
 
-from app.checks import baas_probes
+from app.checks import baas_collector, baas_probes
 from app.checks.active_collector import without_probes
 from app.checks.baas import firebase_rtdb_public, firebase_storage_listable
+from app.checks.baas_collector import discover_backends
 from app.checks.baas_probes import (
     RTDB_MAX_BYTES,
     STORAGE_HOST,
@@ -371,3 +372,70 @@ def test_rtdb_fix_is_valid_json() -> None:
     assert backend is not None
     assert backend.snippet is not None
     assert "rules" in json.loads(backend.snippet)
+
+
+# --- the whole path, from a site's script to a finding ---
+
+KEY_NAME = "alice-private-user-id"
+SITE_SCRIPT = f"""const firebaseConfig = {{
+  apiKey:        "{"AIza" + "x" * 35}",
+  databaseURL:   "https://{HOST}",
+  projectId:     "my-app",
+  storageBucket: "{BUCKET}",
+}};""".encode()
+
+
+def _site() -> ScanContext:
+    return ScanContext(
+        hostname="example.com",
+        https=response(
+            url="https://example.com/", body=b'<html><script src="app.js"></script></html>'
+        ),
+    )
+
+
+def _report(
+    monkeypatch: pytest.MonkeyPatch, answer: SafeResponse, *confirmed: DiscoveredBackend
+) -> tuple[Any, FakeGet]:
+    def script(_url: str, **_kwargs: Any) -> SafeResponse:
+        return response(body=SITE_SCRIPT)
+
+    monkeypatch.setattr(baas_collector, "safe_get", script)
+    backend_get = FakeGet()
+    backend_get.answer = answer
+    monkeypatch.setattr(baas_probes, "safe_get", backend_get)
+    ctx = probe_backends(discover_backends(_site()), set(confirmed))
+    return run_checks(ctx, allow_active=True), backend_get
+
+
+def _baas_findings(report: Any) -> dict[str, Any]:
+    return {item.check_id: item for item in report.findings if item.check_id.startswith("baas.")}
+
+
+def test_open_database_from_script_to_finding(monkeypatch: pytest.MonkeyPatch) -> None:
+    answer = response(body=json.dumps({KEY_NAME: True, "second": True}).encode())
+
+    report, backend_get = _report(monkeypatch, answer, RTDB)
+
+    assert backend_get.urls == [RTDB_URL]
+    found = _baas_findings(report)
+    assert found["baas.firebase_rtdb_public"].severity is Severity.CRITICAL
+    assert "2 top-level keys" in found["baas.firebase_rtdb_public"].evidence
+    assert KEY_NAME not in report.model_dump_json()
+
+
+def test_locked_database_from_script_to_finding(monkeypatch: pytest.MonkeyPatch) -> None:
+    answer = response(status=401, body=b'{"error":"Permission denied"}')
+
+    report, _ = _report(monkeypatch, answer, RTDB)
+
+    assert "baas.firebase_rtdb_public" not in _baas_findings(report)
+
+
+def test_found_but_unconfirmed_backends_get_no_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    report, backend_get = _report(monkeypatch, response(body=b"{}"))
+
+    assert backend_get.urls == []
+    found = _baas_findings(report)
+    assert HOST in found["baas.backends_found"].evidence
+    assert "baas.firebase_rtdb_public" not in found

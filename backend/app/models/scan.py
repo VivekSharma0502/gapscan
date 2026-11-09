@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import JSON, Column, DateTime, Enum, ForeignKey, Index, UniqueConstraint, Uuid
 from sqlmodel import Field, SQLModel
 
-from app.checks.base import Category, Severity
+from app.checks.base import BotProtection, Category, Severity
 from app.checks.runner import ScanStatus
 
 # A scan still unfinished after this long has lost its worker. Celery's time limits don't
@@ -107,6 +107,10 @@ class Scan(SQLModel, table=True):
     grade_cap_reason: str | None = None
     score_label: str | None = None
     incomplete_reason: str | None = None
+    # Whose bot protection stopped part of this scan, so the report can link how to allow it.
+    blocked_by: BotProtection | None = Field(
+        default=None, sa_column=_enum_column(BotProtection, nullable=True)
+    )
     skipped_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now, sa_column=_timestamp_column())
     started_at: datetime | None = Field(default=None, sa_column=_timestamp_column(nullable=True))

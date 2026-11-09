@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from sqlalchemy import ColumnElement, and_, func, or_
 from sqlmodel import Session, select, update
 
-from app.checks.base import Category, Fix, Severity
+from app.checks.base import BOT_PROTECTION_INFO, Category, Fix, Severity
 from app.checks.catalog import CATALOG
 from app.checks.runner import ScanStatus, SkippedCheck
 from app.core.auth import Viewer, ensure_profile, get_viewer, require_viewer
@@ -116,6 +116,11 @@ class FindingOut(BaseModel):
     fix: Fix | None
 
 
+class BotProtectionHelp(BaseModel):
+    name: str
+    help_url: str
+
+
 class ScanOut(BaseModel):
     id: UUID
     target: str
@@ -128,6 +133,8 @@ class ScanOut(BaseModel):
     grade_cap_reason: str | None
     score_label: str | None
     incomplete_reason: str | None
+    # Set when a platform's bot protection stopped part of the scan.
+    bot_protection: BotProtectionHelp | None
     findings: list[FindingOut]
     # Every finding, including those cut from a teaser. The count reveals no details.
     total_findings: int
@@ -392,6 +399,13 @@ def _expire_if_stale(session: Session, scan_id: UUID, now: datetime) -> None:
     session.commit()
 
 
+def _bot_protection_help(scan: Scan) -> BotProtectionHelp | None:
+    if scan.blocked_by is None:
+        return None
+    info = BOT_PROTECTION_INFO[scan.blocked_by]
+    return BotProtectionHelp(name=info.name, help_url=info.help_url)
+
+
 def _finding_out(record: FindingRecord) -> FindingOut:
     text = CATALOG.get(record.check_id)
     return FindingOut(
@@ -435,6 +449,7 @@ def get_scan(scan_id: UUID, session: SessionDep, viewer: ViewerDep) -> ScanOut:
         grade_cap_reason=scan.grade_cap_reason,
         score_label=scan.score_label,
         incomplete_reason=scan.incomplete_reason,
+        bot_protection=_bot_protection_help(scan),
         findings=[_finding_out(record) for record in shown],
         total_findings=len(records),
         skipped=[SkippedCheck(**item) for item in scan.skipped_json] if full_report else [],

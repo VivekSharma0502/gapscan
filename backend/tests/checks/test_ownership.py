@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 
 from app.checks import ownership
+from app.checks.base import BotProtection
 from app.checks.ownership import (
     FailureCode,
     VerificationMethod,
@@ -303,3 +304,32 @@ def test_temporary_failure_on_an_old_name_means_we_dont_know(net: FakeNet, which
 
     assert not result.proven
     assert not result.definitely_gone
+
+
+@pytest.mark.parametrize(
+    ("header", "platform", "name"),
+    [
+        ("x-vercel-mitigated", BotProtection.VERCEL, "Vercel"),
+        ("cf-mitigated", BotProtection.CLOUDFLARE, "Cloudflare"),
+    ],
+)
+def test_blocked_verification_file_is_named_and_keeps_the_proof(
+    monkeypatch: pytest.MonkeyPatch, header: str, platform: BotProtection, name: str
+) -> None:
+    def blocked(*_args: object, **_kwargs: object) -> SafeResponse:
+        return response(status=403, headers={header: "challenge"}, body=b"<html></html>")
+
+    def no_txt(*_args: object, **_kwargs: object) -> list[str]:
+        return []
+
+    monkeypatch.setattr(ownership, "safe_get", blocked)
+    monkeypatch.setattr(ownership, "safe_dns_records", no_txt)
+
+    result = prove_ownership("example.com", "token")
+
+    assert not result.proven
+    assert not result.definitely_gone
+    assert result.blocked_by is platform
+    file_failure = next(item for item in result.failures if item.method.value == "file")
+    assert file_failure.code is FailureCode.FILE_BLOCKED
+    assert f"{name}'s bot protection" in file_failure.message

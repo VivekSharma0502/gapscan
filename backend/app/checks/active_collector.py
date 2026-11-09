@@ -9,7 +9,7 @@ from html.parser import HTMLParser
 from time import monotonic
 from urllib.parse import urljoin, urlsplit
 
-from app.checks.base import Input, Probe, ScanContext
+from app.checks.base import Input, Probe, ScanContext, bot_protection
 from app.checks.exposure import FIXED_PROBE_PATHS
 from app.core.safe_http import SafeHttpError, SafeResponse, safe_get
 
@@ -60,14 +60,13 @@ def source_map_paths(homepage: SafeResponse, allowed: frozenset[str]) -> list[st
     return [f"{path}.map" for path in same_origin_script_paths(homepage, allowed)[:MAX_SCRIPTS]]
 
 
-def was_challenged(response: SafeResponse) -> bool:
-    """Whether bot protection answered, instead of the site itself."""
-    return "cf-mitigated" in response.headers or "x-vercel-mitigated" in response.headers
-
-
 def gave_no_real_answer(response: SafeResponse) -> bool:
     # A challenge page or an overloaded server says nothing about whether the file exists.
-    return response.status_code == 429 or response.status_code >= 500 or was_challenged(response)
+    return (
+        response.status_code == 429
+        or response.status_code >= 500
+        or bot_protection(response) is not None
+    )
 
 
 def attach_probes(ctx: ScanContext) -> ScanContext:
@@ -80,6 +79,7 @@ def attach_probes(ctx: ScanContext) -> ScanContext:
     scheme = "http" if ctx.homepage_via_http else "https"
     deadline = monotonic() + PROBE_BUDGET_SECONDS
     told_to_stop = False
+    blocked_by = ctx.blocked_by
     probes: dict[str, Probe] = {}
 
     for path in (*FIXED_PROBE_PATHS, *source_map_paths(ctx.homepage, allowed)):
@@ -98,11 +98,13 @@ def attach_probes(ctx: ScanContext) -> ScanContext:
             continue
         # The site asked us to slow down or challenged us, so the rest aren't sent at all.
         # Security: bot protection is the owner's choice, and this scanner doesn't push past it.
-        told_to_stop = response.status_code == 429 or was_challenged(response)
+        challenged_by = bot_protection(response)
+        blocked_by = blocked_by or challenged_by
+        told_to_stop = response.status_code == 429 or challenged_by is not None
         if not gave_no_real_answer(response):
             probes[path] = Probe(path, response.status_code, response.content)
 
-    return replace(ctx, probes=probes)
+    return replace(ctx, probes=probes, blocked_by=blocked_by)
 
 
 def without_probes(ctx: ScanContext, reason: str) -> ScanContext:

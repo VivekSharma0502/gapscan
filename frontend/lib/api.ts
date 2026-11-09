@@ -57,6 +57,11 @@ export interface SkippedCheck {
   not_applicable: boolean;
 }
 
+export interface BotProtectionHelp {
+  name: string;
+  help_url: string;
+}
+
 export interface Scan {
   id: string;
   target: string;
@@ -74,6 +79,8 @@ export interface Scan {
   grade_cap_reason: string | null;
   score_label: string | null;
   incomplete_reason: string | null;
+  // Set when a platform's bot protection stopped part of the scan.
+  bot_protection: BotProtectionHelp | null;
   findings: Finding[];
   total_findings: number;
   skipped: SkippedCheck[];
