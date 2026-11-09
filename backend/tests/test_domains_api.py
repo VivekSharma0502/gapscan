@@ -9,7 +9,7 @@ from sqlalchemy import Engine
 from sqlmodel import Session, select
 
 from app.api import domains as domains_api
-from app.checks.base import Category, Severity
+from app.checks.base import BaasKind, Category, Severity
 from app.checks.ownership import (
     FailureCode,
     MethodFailure,
@@ -19,7 +19,7 @@ from app.checks.ownership import (
 from app.core.auth import Viewer, get_viewer
 from app.core.rate_limit import limiter
 from app.main import app
-from app.models.domain import Domain
+from app.models.domain import Domain, DomainBackend
 from app.models.profile import Profile
 from app.models.scan import (
     FindingRecord,
@@ -509,3 +509,112 @@ def test_cors_allows_delete(client: TestClient) -> None:
     )
 
     assert result.status_code == 200
+
+
+# --- backends named in a site's code ---
+
+
+def add_backend(
+    engine: Engine,
+    domain_id: UUID,
+    identifier: str = "abcdefghijklmnopqrst",
+    kind: BaasKind = BaasKind.SUPABASE,
+) -> UUID:
+    with Session(engine) as session:
+        row = DomainBackend(domain_id=domain_id, kind=kind, identifier=identifier)
+        session.add(row)
+        session.commit()
+        return row.id
+
+
+def load_backend(engine: Engine, backend_id: UUID) -> DomainBackend:
+    with Session(engine) as session:
+        return session.get_one(DomainBackend, backend_id)
+
+
+def confirm(client: TestClient, domain_id: UUID, backend_id: UUID, value: bool = True) -> Any:
+    return client.post(
+        f"/api/domains/{domain_id}/backends/{backend_id}/confirm", json={"confirmed": value}
+    )
+
+
+def test_backends_are_listed_unconfirmed(client: TestClient, db_engine: Engine, me: UUID) -> None:
+    domain = seed(db_engine, me)
+    add_backend(db_engine, domain)
+
+    body = client.get(f"/api/domains/{domain}/backends").json()
+
+    assert len(body) == 1
+    assert body[0]["kind"] == "supabase"
+    assert body[0]["identifier"] == "abcdefghijklmnopqrst"
+    assert body[0]["confirmed"] is False
+
+
+def test_owner_can_confirm_and_take_it_back(
+    client: TestClient, db_engine: Engine, me: UUID
+) -> None:
+    domain = seed(db_engine, me)
+    backend = add_backend(db_engine, domain)
+
+    assert confirm(client, domain, backend).json()["confirmed"] is True
+    assert load_backend(db_engine, backend).confirmed_at is not None
+
+    assert confirm(client, domain, backend, False).json()["confirmed"] is False
+    assert load_backend(db_engine, backend).confirmed_at is None
+
+
+def test_unverified_domain_cannot_confirm_a_backend(
+    client: TestClient, db_engine: Engine, me: UUID
+) -> None:
+    domain = seed(db_engine, me, verified=False)
+    backend = add_backend(db_engine, domain)
+
+    assert confirm(client, domain, backend).status_code == 403
+    assert load_backend(db_engine, backend).confirmed_at is None
+
+
+def test_confirmation_can_be_withdrawn_after_losing_verification(
+    client: TestClient, db_engine: Engine, me: UUID
+) -> None:
+    domain = seed(db_engine, me, verified=False)
+    backend = add_backend(db_engine, domain)
+
+    assert confirm(client, domain, backend, False).status_code == 200
+
+
+def test_other_peoples_backends_are_hidden(client: TestClient, db_engine: Engine, me: UUID) -> None:
+    other_domain = seed(db_engine, uuid4())
+    backend = add_backend(db_engine, other_domain)
+
+    assert client.get(f"/api/domains/{other_domain}/backends").status_code == 404
+    assert confirm(client, other_domain, backend).status_code == 404
+    assert load_backend(db_engine, backend).confirmed_at is None
+
+
+def test_a_backend_cannot_be_confirmed_through_another_domain(
+    client: TestClient, db_engine: Engine, me: UUID
+) -> None:
+    mine = seed(db_engine, me, hostname="mine.example.com")
+    theirs = seed(db_engine, uuid4(), hostname="theirs.example.com")
+    backend = add_backend(db_engine, theirs)
+
+    assert confirm(client, mine, backend).status_code == 404
+    assert load_backend(db_engine, backend).confirmed_at is None
+
+
+@pytest.mark.parametrize("body", [{}, {"confirmed": "maybe"}, {"confirmed": True, "extra": 1}])
+def test_malformed_confirmation_is_rejected(
+    client: TestClient, db_engine: Engine, me: UUID, body: dict[str, Any]
+) -> None:
+    domain = seed(db_engine, me)
+    backend = add_backend(db_engine, domain)
+
+    response = client.post(f"/api/domains/{domain}/backends/{backend}/confirm", json=body)
+
+    assert response.status_code == 422
+
+
+def test_backends_need_sign_in(client: TestClient, db_engine: Engine) -> None:
+    domain = seed(db_engine, uuid4())
+
+    assert client.get(f"/api/domains/{domain}/backends").status_code == 401

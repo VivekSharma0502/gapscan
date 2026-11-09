@@ -6,7 +6,7 @@ from enum import StrEnum
 from pydantic import BaseModel
 
 # Imported for their side effect: each module registers its checks with the registry.
-from app.checks import cms, cookies, dns_email, exposure, headers, tls  # noqa: F401
+from app.checks import baas, cms, cookies, dns_email, exposure, headers, tls  # noqa: F401
 from app.checks.base import Finding, Input, ScanContext, Severity, SkipCheck, StepCallback
 from app.checks.registry import CheckSpec, all_checks
 from app.checks.scoring import calculate_score, final_grade

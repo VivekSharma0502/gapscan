@@ -6,7 +6,8 @@ from uuid import UUID, uuid4
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, UniqueConstraint, Uuid, false
 from sqlmodel import Field, SQLModel
 
-from app.models.scan import utc_now
+from app.checks.base import BaasKind
+from app.models.scan import _enum_column, utc_now
 
 
 class Domain(SQLModel, table=True):
@@ -34,4 +35,33 @@ class Domain(SQLModel, table=True):
     )
     created_at: datetime = Field(
         default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+
+
+class DomainBackend(SQLModel, table=True):
+    """A Firebase or Supabase backend named in a verified site's code."""
+
+    __tablename__ = "domain_backends"
+    __table_args__ = (
+        UniqueConstraint(
+            "domain_id", "kind", "identifier", name="uq_domain_backends_domain_kind_identifier"
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    domain_id: UUID = Field(
+        sa_column=Column(Uuid, ForeignKey("domains.id", ondelete="CASCADE"), nullable=False)
+    )
+    kind: BaasKind = Field(sa_column=_enum_column(BaasKind))
+    identifier: str = Field(max_length=253)
+    first_seen_at: datetime = Field(
+        default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+    last_seen_at: datetime = Field(
+        default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+    # Security: null means never send this backend a request. Owning a site doesn't prove
+    # owning everything its code names, and a site could name someone else's project on purpose.
+    confirmed_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )

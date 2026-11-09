@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3b-1: BaaS discovery
+
+**Added**
+- Full scans of verified domains read the homepage and up to 20 of the site's own scripts (1 MB each, 6 MB in total, 30 seconds) to find Firebase databases and storage buckets and Supabase projects. Results are stored per domain. Run `alembic upgrade head`, and restart the worker.
+- `baas.supabase_service_key`: a `service_role` or `sb_secret_` key in code sent to browsers is critical. An info finding lists the backends found and how many scripts were read.
+- `GET /api/domains/{id}/backends` and `POST /api/domains/{id}/backends/{backend_id}/confirm`, so an owner can say which backends are theirs. The screen for this arrives in a later step.
+- Fixes can now be a single set of instructions in a provider's console, instead of one tab per hosting platform.
+
+**Security**
+- This step sends nothing to Firebase or Supabase. Discovery only requests the verified site, after ownership is proven again.
+- A backend starts unconfirmed, and later probes will only contact confirmed ones. Owning a site doesn't prove owning everything its code names: it could be a vendor's project, or someone else's named on purpose.
+- Backend names must match the exact shape of an official host or bucket, so a crafted page can't point later requests anywhere else.
+- Keys are never kept. A finding holds a fixed mask and the script's path, and the token's role is read without trusting it.
+- A script that couldn't be read leaves the key check skipped rather than clear.
+
+**Decisions**
+- Severity agreed for step 3b: a readable RTDB root and a service key in a bundle are critical, and a readable Supabase table is high, with a per-table "meant to be public" option that makes it info and stops it affecting the grade.
+- Supabase stopped serving its table list to anon keys in April 2026, so table names will come from `.from()` calls in the site's scripts.
+
 ## 2026-11-10: Phase 3, step 3a complete
 
 GitHub repo secret scanning is finished and verified end to end: installing the app, linking it to the signed-in account, a real push through the signed webhook and worker, and the Repositories and findings pages in the browser.

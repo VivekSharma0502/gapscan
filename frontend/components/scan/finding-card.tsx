@@ -2,7 +2,7 @@
 
 import { CopyButton } from "@/components/scan/copy-button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { Finding, Fix, Platform } from "@/lib/api";
+import type { BackendFix, Finding, Fix, Platform } from "@/lib/api";
 
 export const PLATFORMS: { id: Platform; label: string }[] = [
   { id: "vercel", label: "Vercel" },
@@ -16,6 +16,37 @@ interface PlatformChoice {
   onPlatformChange: (platform: Platform) => void;
 }
 
+function BackendFixSteps({ fix, backend }: { fix: Fix; backend: BackendFix }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-pretty">{fix.how_to_fix}</p>
+      {backend.snippet !== null && (
+        <div className="overflow-hidden rounded-lg border">
+          <div className="flex items-center justify-between border-b bg-muted/40 py-1 pr-1 pl-3">
+            <span className="text-xs text-muted-foreground">
+              {backend.label}
+            </span>
+            <CopyButton text={backend.snippet} />
+          </div>
+          <pre className="overflow-x-auto p-3 font-mono text-xs leading-5">
+            <code>{backend.snippet}</code>
+          </pre>
+        </div>
+      )}
+      {backend.docs_url !== null && (
+        <a
+          href={backend.docs_url}
+          target="_blank"
+          rel="noreferrer"
+          className="w-fit underline underline-offset-4"
+        >
+          {backend.label}&apos;s official instructions
+        </a>
+      )}
+    </div>
+  );
+}
+
 function HowToFix({
   fix,
   platform,
@@ -23,6 +54,11 @@ function HowToFix({
 }: { fix: Fix } & PlatformChoice) {
   const selected = fix.platforms[platform];
   const label = PLATFORMS.find(({ id }) => id === platform)?.label;
+
+  if (fix.backend !== null) {
+    return <BackendFixSteps fix={fix} backend={fix.backend} />;
+  }
+  if (selected === undefined) return null;
 
   return (
     <div className="flex flex-col gap-3">

@@ -76,6 +76,8 @@ EXPECTED_CHECKS = {
     "exposure.backup_file",
     "exposure.source_maps",
     "exposure.directory_listing",
+    "baas.supabase_service_key",
+    "baas.backends_found",
 }
 
 
@@ -93,7 +95,8 @@ def test_every_check_has_full_text(check_id: str) -> None:
     assert text.title.strip()
     assert text.fix.what_it_means.strip()
     assert text.fix.how_to_fix.strip()
-    assert set(text.fix.platforms) == set(Platform)
+    if text.fix.backend is None:
+        assert set(text.fix.platforms) == set(Platform)
     for fix in text.fix.platforms.values():
         assert fix.instructions.strip()
 

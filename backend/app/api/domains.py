@@ -18,6 +18,7 @@ from app.api.scans import (
     lock_target,
     scan_summary,
 )
+from app.checks.base import BaasKind
 from app.checks.domains import registrable_domain, shared_platform_suffix
 from app.checks.ownership import (
     FailureCode,
@@ -30,7 +31,7 @@ from app.checks.ownership import (
 from app.core.auth import ensure_profile
 from app.core.rate_limit import limiter
 from app.core.safe_http import BlockedTargetError, normalize_scan_target
-from app.models.domain import Domain
+from app.models.domain import Domain, DomainBackend
 from app.models.profile import Profile
 from app.models.scan import (
     SCAN_STALE_AFTER,
@@ -49,6 +50,7 @@ MAX_DOMAINS_PER_USER = 3
 ADD_RATE_LIMIT = "10/minute"
 VERIFY_RATE_LIMIT = "10/minute"
 SCAN_RATE_LIMIT = "5/minute"
+CONFIRM_BACKEND_RATE_LIMIT = "30/minute"
 HOURLY_FULL_SCAN_CAP = 10
 DEFAULT_SCANS_PER_PAGE = 20
 MAX_SCANS_PER_PAGE = 100
@@ -120,6 +122,33 @@ class ScanPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class BackendOut(BaseModel):
+    id: UUID
+    kind: BaasKind
+    identifier: str
+    # Nothing is ever sent to a backend until its domain's owner has confirmed it is theirs.
+    confirmed: bool
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+
+class BackendConfirm(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmed: bool
+
+
+def _backend_out(backend: DomainBackend) -> BackendOut:
+    return BackendOut(
+        id=backend.id,
+        kind=backend.kind,
+        identifier=backend.identifier,
+        confirmed=backend.confirmed_at is not None,
+        first_seen_at=backend.first_seen_at,
+        last_seen_at=backend.last_seen_at,
+    )
 
 
 def _domain_out(domain: Domain) -> DomainOut:
@@ -226,6 +255,43 @@ def verify_domain(
             for item in result.failures
         ],
     )
+
+
+@router.get("/{domain_id}/backends", response_model=list[BackendOut])
+def list_backends(domain_id: UUID, session: SessionDep, viewer: SignedInDep) -> list[BackendOut]:
+    _owned_domain(session, domain_id, viewer.id)
+    rows = session.exec(
+        select(DomainBackend)
+        .where(DomainBackend.domain_id == domain_id)
+        .order_by(DomainBackend.kind, DomainBackend.identifier)
+    )
+    return [_backend_out(row) for row in rows]
+
+
+@router.post("/{domain_id}/backends/{backend_id}/confirm", response_model=BackendOut)
+@limiter.limit(CONFIRM_BACKEND_RATE_LIMIT)
+def confirm_backend(
+    request: Request,
+    response: Response,
+    domain_id: UUID,
+    backend_id: UUID,
+    body: BackendConfirm,
+    session: SessionDep,
+    viewer: SignedInDep,
+) -> BackendOut:
+    domain = _owned_domain(session, domain_id, viewer.id)
+    # Security: a backend can only be vouched for by someone who has proven they own the site
+    # that names it. Taking a confirmation back is always allowed.
+    if body.confirmed and domain.verified_at is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="Verify this domain before confirming its backends."
+        )
+    backend = session.get(DomainBackend, backend_id)
+    if backend is None or backend.domain_id != domain.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Backend not found.")
+    backend.confirmed_at = utc_now() if body.confirmed else None
+    session.commit()
+    return _backend_out(backend)
 
 
 @router.get("/{domain_id}/scans", response_model=ScanPage)

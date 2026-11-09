@@ -89,10 +89,15 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - [x] Repositories page, findings page and dashboard section
 - Personal-account installs only for now. Organization installs need GitHub's user authorization during install (later)
 
+**Step 3b: BaaS misconfiguration checks (verified domains only, read-only probes)**
+- [x] Discovery: Firebase and Supabase backends in the homepage and same-origin scripts, stored per domain. A server-only Supabase key in a script is critical
+- [ ] Firebase RTDB root readable → critical (stores yes/no + key count). Storage listing → high
+- [ ] Supabase tables named by `.from()` in scripts, checked with HEAD. Readable → high, with a per-table "meant to be public" option that makes it info and stops it affecting the grade
+- [ ] Plain-language fixes with rule snippets, and the "these are mine" UI
+- Nothing is sent to a backend until the domain's owner confirms it's theirs, because a verified site's code can name someone else's project
+- Firestore isn't covered, because probing it needs collection names
+
 **Still to do**
-- [ ] BaaS checks (verified domains only):
-  - Firebase config in JS bundle → RTDB `/.json` readable? Firestore/Storage rules open?
-  - Supabase URL + anon key in bundle → tables readable without RLS?
 - [ ] Correlation: repo finding mentions a project/domain the user owns → link findings, raise severity if live exposure confirmed
 
 ### Phase 4 — Monitoring + reports (Week 5)
@@ -113,6 +118,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - **domains**: id, owner_id, hostname (unique per owner, not globally), verify_token, verified_at, verified_method, created_at
 - **github_install_states**: id, owner_id, token_hash, expires_at, created_at (one-time, ties an install redirect to the user who started it)
 - **github_installations**: id, owner_id, installation_id, account_id, account_login, suspended_at, created_at
+- **domain_backends**: id, domain_id, kind (firebase_rtdb|firebase_storage|supabase), identifier, first_seen_at, last_seen_at, confirmed_at (null = never probed)
 - **repos**: id, owner_id, installation_id, github_repo_id, full_name, is_private, first_full_scan_at, needs_full_scan, created_at
 - **github_deliveries**: delivery_id, received_at (webhook replay protection)
 - **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, before_sha, after_sha, target, mode (quick|full), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, grade_cap_reason, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
@@ -140,6 +146,8 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 | GET | /api/repos/{id}/findings | auth, owner only. Masked findings by severity, each with how to replace the key |
 | POST | /api/github/webhook | verify `X-Hub-Signature-256` |
 | GET | /api/dashboard | auth. Per-domain standing and trend, plus recent scans |
+| GET | /api/domains/{id}/backends | auth, owner only. Backends named in the site's code |
+| POST | /api/domains/{id}/backends/{backend_id}/confirm | auth, 30/min per IP. The owner says a backend is theirs, or takes that back. Verified domains only |
 | GET | /api/domains/{id}/scans | auth, owner only. Full scans, paginated (`limit`, `offset`, `scored_only`) |
 | GET | /api/scans/{id}/report.pdf | auth |
 | PUT | /api/settings/notifications | auth |

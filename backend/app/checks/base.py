@@ -44,6 +44,7 @@ class Category(StrEnum):
     CMS = "cms"
     EXPOSURE = "exposure"
     SECRETS = "secrets"
+    BAAS = "baas"
 
 
 class Platform(StrEnum):
@@ -62,15 +63,30 @@ class PlatformFix(BaseModel):
     snippet: str | None = None
 
 
+class BackendFix(BaseModel):
+    """A fix made in a backend's own console, which no hosting platform has a say in."""
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    snippet: str | None = None
+    # The provider's own instructions, so people can check ours against the source.
+    docs_url: str | None = None
+
+
 class Fix(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     what_it_means: str
     how_to_fix: str
-    platforms: dict[Platform, PlatformFix]
+    platforms: dict[Platform, PlatformFix] = {}
+    # Set instead of platforms when the fix doesn't depend on where the site is hosted.
+    backend: BackendFix | None = None
 
     @model_validator(mode="after")
     def covers_every_platform(self) -> "Fix":
+        if self.backend is not None:
+            return self
         missing = set(Platform) - set(self.platforms)
         if missing:
             raise ValueError(f"missing platforms: {sorted(missing)}")
@@ -108,6 +124,43 @@ class Input(StrEnum):
     CAA = "caa_records"
     # Requests for files that shouldn't be public. Only ever collected for a verified domain.
     PROBES = "probes"
+    # Backends named in the site's own code. Only ever collected for a verified domain.
+    BAAS = "baas"
+
+
+class BaasKind(StrEnum):
+    FIREBASE_RTDB = "firebase_rtdb"
+    FIREBASE_STORAGE = "firebase_storage"
+    SUPABASE = "supabase"
+
+
+@dataclass(frozen=True)
+class DiscoveredBackend:
+    kind: BaasKind
+    # A database host, a bucket name or a Supabase project ref. None of them are secrets.
+    identifier: str
+
+
+@dataclass(frozen=True)
+class ExposedServiceKey:
+    """Where a server-only key was found.
+
+    Security: holds a fixed mask and a location, never the key. There is nothing here that
+    could be stored, logged or sent by mistake.
+    """
+
+    mask: str
+    location: str
+
+
+@dataclass(frozen=True)
+class BaasDiscovery:
+    backends: tuple[DiscoveredBackend, ...]
+    exposed_keys: tuple[ExposedServiceKey, ...]
+    scripts_total: int
+    scripts_read: int
+    # Couldn't be answered, so a key in them can't be ruled out.
+    scripts_failed: int
 
 
 class SkipCheck(Exception):
@@ -140,6 +193,8 @@ class ScanContext:
     caa_records: list[str] | None = None
     # Keyed by path. None unless ownership was confirmed for this scan.
     probes: Mapping[str, Probe] | None = None
+    # None unless ownership was confirmed for this scan.
+    baas: BaasDiscovery | None = None
     # Set when the hostname sits under a domain shared by many customers, like vercel.app.
     shared_platform_suffix: str | None = None
     # Why an input is missing, shown to the user next to the checks it prevented.

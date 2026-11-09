@@ -22,10 +22,18 @@ export interface PlatformFix {
   snippet: string | null;
 }
 
+export interface BackendFix {
+  label: string;
+  snippet: string | null;
+  docs_url: string | null;
+}
+
 export interface Fix {
   what_it_means: string;
   how_to_fix: string;
-  platforms: Record<Platform, PlatformFix>;
+  // Empty when the fix doesn't depend on hosting, and backend is set instead.
+  platforms: Partial<Record<Platform, PlatformFix>>;
+  backend: BackendFix | null;
 }
 
 export interface Finding {

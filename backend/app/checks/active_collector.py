@@ -41,8 +41,8 @@ def allowed_probe_hosts(hostname: str) -> frozenset[str]:
     return frozenset({hostname, f"www.{hostname}"})
 
 
-def source_map_paths(homepage: SafeResponse, allowed: frozenset[str]) -> list[str]:
-    """Return "<script>.map" paths for this site's own scripts. Other hosts aren't probed."""
+def same_origin_script_paths(homepage: SafeResponse, allowed: frozenset[str]) -> list[str]:
+    """Return the paths of this site's own scripts. Other hosts are never requested."""
     parser = _ScriptParser()
     parser.feed(homepage.content[:MAX_HTML_BYTES].decode("utf-8", "replace"))
     paths: list[str] = []
@@ -50,15 +50,17 @@ def source_map_paths(homepage: SafeResponse, allowed: frozenset[str]) -> list[st
         parts = urlsplit(urljoin(homepage.url, source))
         if parts.hostname not in allowed or not parts.path.endswith((".js", ".mjs")):
             continue
-        path = f"{parts.path}.map"
-        if len(path) <= MAX_PATH_LENGTH and path not in paths:
-            paths.append(path)
-        if len(paths) == MAX_SCRIPTS:
-            break
+        if len(f"{parts.path}.map") <= MAX_PATH_LENGTH and parts.path not in paths:
+            paths.append(parts.path)
     return paths
 
 
-def _gave_no_real_answer(response: SafeResponse) -> bool:
+def source_map_paths(homepage: SafeResponse, allowed: frozenset[str]) -> list[str]:
+    """Return "<script>.map" paths for this site's own scripts."""
+    return [f"{path}.map" for path in same_origin_script_paths(homepage, allowed)[:MAX_SCRIPTS]]
+
+
+def gave_no_real_answer(response: SafeResponse) -> bool:
     # A challenge page or an overloaded server says nothing about whether the file exists.
     return (
         response.status_code == 429
@@ -95,11 +97,11 @@ def attach_probes(ctx: ScanContext) -> ScanContext:
             continue
         # The site asked us to slow down, so the remaining requests aren't sent at all.
         rate_limited = response.status_code == 429
-        if not _gave_no_real_answer(response):
+        if not gave_no_real_answer(response):
             probes[path] = Probe(path, response.status_code, response.content)
 
     return replace(ctx, probes=probes)
 
 
 def without_probes(ctx: ScanContext, reason: str) -> ScanContext:
-    return replace(ctx, skip_reasons={**ctx.skip_reasons, Input.PROBES: reason})
+    return replace(ctx, skip_reasons={**ctx.skip_reasons, Input.PROBES: reason, Input.BAAS: reason})

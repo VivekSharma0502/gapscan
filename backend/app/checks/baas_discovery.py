@@ -1,0 +1,108 @@
+"""Finds Firebase and Supabase backends, and server-only keys, in a site's own code.
+
+Pure text matching, with no network access. Everything matched comes from a page the scanned
+site controls, so each value must fit the exact shape of an official host or bucket before it
+counts, and later steps can only ever contact what passes here.
+"""
+
+import re
+from urllib.parse import urlsplit
+
+import jwt
+
+from app.checks.base import BaasKind, DiscoveredBackend, ExposedServiceKey
+
+SERVICE_ROLE_MASK = "eyJ****"
+SECRET_KEY_MASK = "sb_secret_****"  # noqa: S105
+
+# A Firebase config object is written on a few lines, so its fields sit close together.
+_CONFIG_WINDOW_CHARS = 1500
+_JWT_PART = r"[A-Za-z0-9_-]{10,4096}"
+
+# Security: fully anchored, one label per wildcard. "evil.com/.firebaseio.com" or
+# "x.firebaseio.com.evil.com" can never match.
+_RTDB_HOST_RES = (
+    re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.firebaseio\.com"),
+    re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z0-9-]{1,30}\.firebasedatabase\.app"),
+)
+_BUCKET_RE = re.compile(r"[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]")
+_SUPABASE_URL_RE = re.compile(r"https:\\?/\\?/([a-z0-9]{20})\.supabase\.co(?![a-z0-9.-])")
+
+# Quotes may be escaped, because frameworks embed these objects inside JSON strings.
+_Q = r"""\\?["'`]"""
+_OPTIONAL_Q = r"""\\?["'`]?"""
+_API_KEY_RE = re.compile(rf"apiKey{_OPTIONAL_Q}\s*:\s*{_Q}AIza[0-9A-Za-z_-]{{35}}")
+_JWT_RE = re.compile(rf"\beyJ{_JWT_PART}\.eyJ{_JWT_PART}\.{_JWT_PART}")
+_SECRET_KEY_RE = re.compile(r"\bsb_secret_[A-Za-z0-9_-]{20,}")
+
+
+def _config_field(window: str, name: str) -> str | None:
+    match = re.search(rf"""{name}{_OPTIONAL_Q}\s*:\s*{_Q}([^"'`\s]{{1,300}}?){_Q}""", window)
+    return match.group(1).replace("\\", "") if match else None
+
+
+def _rtdb_host(database_url: str) -> str | None:
+    """Return the host of an official database URL, or None for anything else."""
+    try:
+        parts = urlsplit(database_url)
+        port = parts.port
+    except ValueError:
+        return None
+    # Security: a username, port or path would mean this isn't a plain database address.
+    if parts.scheme != "https" or parts.username or port or parts.path not in ("", "/"):
+        return None
+    host = (parts.hostname or "").lower()
+    return host if any(pattern.fullmatch(host) for pattern in _RTDB_HOST_RES) else None
+
+
+def _bucket_name(value: str) -> str | None:
+    name = value.removeprefix("gs://").lower()
+    return name if _BUCKET_RE.fullmatch(name) and ".." not in name else None
+
+
+def _firebase_backends(text: str) -> set[DiscoveredBackend]:
+    found: set[DiscoveredBackend] = set()
+    for match in _API_KEY_RE.finditer(text):
+        window = text[
+            max(0, match.start() - _CONFIG_WINDOW_CHARS) : match.end() + _CONFIG_WINDOW_CHARS
+        ]
+        # An API key and a project id together mean this really is a Firebase config.
+        if _config_field(window, "projectId") is None:
+            continue
+        database_url = _config_field(window, "databaseURL")
+        host = _rtdb_host(database_url) if database_url else None
+        if host:
+            found.add(DiscoveredBackend(BaasKind.FIREBASE_RTDB, host))
+        bucket_value = _config_field(window, "storageBucket")
+        bucket = _bucket_name(bucket_value) if bucket_value else None
+        if bucket:
+            found.add(DiscoveredBackend(BaasKind.FIREBASE_STORAGE, bucket))
+    return found
+
+
+def find_backends(text: str) -> set[DiscoveredBackend]:
+    supabase = {
+        DiscoveredBackend(BaasKind.SUPABASE, match.group(1))
+        for match in _SUPABASE_URL_RE.finditer(text)
+    }
+    return _firebase_backends(text) | supabase
+
+
+def _is_supabase_service_role(token: str) -> bool:
+    try:
+        # Security: the signature isn't checked because nothing here trusts this token. Only
+        # its stated role is read, to decide whether a server-only key was published.
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except jwt.PyJWTError:
+        return False
+    return claims.get("iss") == "supabase" and claims.get("role") == "service_role"
+
+
+def find_exposed_keys(text: str, location: str) -> list[ExposedServiceKey]:
+    """Report server-only Supabase keys. The keys themselves are not kept or returned."""
+    found: list[ExposedServiceKey] = []
+    if any(_is_supabase_service_role(match.group(0)) for match in _JWT_RE.finditer(text)):
+        found.append(ExposedServiceKey(SERVICE_ROLE_MASK, location))
+    if _SECRET_KEY_RE.search(text):
+        found.append(ExposedServiceKey(SECRET_KEY_MASK, location))
+    return found

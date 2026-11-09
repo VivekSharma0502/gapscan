@@ -10,12 +10,13 @@ from sqlalchemy import delete
 from sqlmodel import select, update
 
 from app.checks.active_collector import attach_probes, without_probes
-from app.checks.base import Category
+from app.checks.baas_collector import discover_backends
+from app.checks.base import BaasDiscovery, Category
 from app.checks.collector import COLLECT_STEPS, collect_context
 from app.checks.ownership import prove_ownership
 from app.checks.runner import ScanReport, ScanStatus, run_checks, selected_checks
 from app.core.db import new_session
-from app.models.domain import Domain
+from app.models.domain import Domain, DomainBackend
 from app.models.github import GithubInstallation, Repo
 from app.models.scan import FindingRecord, Scan, ScanJobStatus, utc_now
 from app.repos.scanner import REPO_STEPS, RepoScanLimitError, RepoScanResult, scan_repository
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 OWNERSHIP_STEP = "ownership_check"
 PROBE_STEP = "active_probes"
+BAAS_STEP = "baas_discovery"
 
 _NOT_VERIFIED_REASON = "This domain isn't verified, so these checks did not run."
 _PROOF_GONE_REASON = (
@@ -61,7 +63,7 @@ def initial_quick_progress() -> dict[str, Any]:
 
 
 def initial_full_progress() -> dict[str, Any]:
-    total = len(COLLECT_STEPS) + 2 + len(selected_checks(allow_active=True))
+    total = len(COLLECT_STEPS) + 3 + len(selected_checks(allow_active=True))
     return _progress(0, total, None)
 
 
@@ -315,6 +317,35 @@ def run_repo_scan(scan_id: str) -> None:
         )
 
 
+def _remember_backends(scan_id: UUID, baas: BaasDiscovery | None) -> None:
+    """Record what the site's code names, so its owner can say which are theirs."""
+    if baas is None or not baas.backends:
+        return
+    with new_session() as session:
+        domain_id = session.get_one(Scan, scan_id).domain_id
+        if domain_id is None:
+            return
+        known = {
+            (row.kind, row.identifier): row
+            for row in session.exec(
+                select(DomainBackend).where(DomainBackend.domain_id == domain_id)
+            )
+        }
+        now = utc_now()
+        for backend in baas.backends:
+            row = known.get((backend.kind, backend.identifier))
+            if row is not None:
+                # An existing row keeps its confirmation, and only the time it was seen moves.
+                row.last_seen_at = now
+            else:
+                session.add(
+                    DomainBackend(
+                        domain_id=domain_id, kind=backend.kind, identifier=backend.identifier
+                    )
+                )
+        session.commit()
+
+
 @celery_app.task(name="scans.run_full")
 def run_full_scan(scan_id: str) -> None:
     """Run the passive and active checks on a verified domain the scan's owner controls."""
@@ -336,6 +367,10 @@ def run_full_scan(scan_id: str) -> None:
         context = collect_context(target, on_step=on_step)
         on_step(PROBE_STEP)
         context = without_probes(context, problem) if problem else attach_probes(context)
+        on_step(BAAS_STEP)
+        if not problem:
+            context = discover_backends(context)
+            _remember_backends(job_id, context.baas)
         # After a problem there are no probes, so the active checks report skipped, not passed.
         report = run_checks(context, on_step=on_step, allow_active=True)
         _save_report(job_id, report, total, finished)

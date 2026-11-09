@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -6,7 +7,15 @@ from sqlalchemy import Engine
 from sqlmodel import Session, select
 
 from app.checks import active_collector, runner
-from app.checks.base import Category, Finding, ScanContext, Severity
+from app.checks.base import (
+    BaasDiscovery,
+    BaasKind,
+    Category,
+    DiscoveredBackend,
+    Finding,
+    ScanContext,
+    Severity,
+)
 from app.checks.catalog import CATALOG
 from app.checks.collector import COLLECT_STEPS
 from app.checks.ownership import (
@@ -17,7 +26,7 @@ from app.checks.ownership import (
 )
 from app.checks.registry import CheckSpec
 from app.checks.runner import ScanStatus, selected_checks
-from app.models.domain import Domain
+from app.models.domain import Domain, DomainBackend
 from app.models.profile import Profile
 from app.models.scan import FindingRecord, Scan, ScanJobStatus, ScanMode, TargetType, utc_now
 from app.workers import celery_app as celery_module
@@ -556,3 +565,97 @@ def test_celery_only_accepts_json() -> None:
     conf = celery_module.celery_app.conf
     assert conf.task_serializer == "json"
     assert list(conf.accept_content) == ["json"]
+
+
+# --- backends named in a site's code ---
+
+RTDB = DiscoveredBackend(BaasKind.FIREBASE_RTDB, "my-app.firebaseio.com")
+SUPABASE = DiscoveredBackend(BaasKind.SUPABASE, "abcdefghijklmnopqrst")
+
+
+def discovery(*backends: DiscoveredBackend) -> Any:
+    def discover(ctx: ScanContext) -> ScanContext:
+        return replace(ctx, baas=BaasDiscovery(backends, (), 1, 1, 0))
+
+    return discover
+
+
+def saved_backends(engine: Engine) -> list[DomainBackend]:
+    with Session(engine) as session:
+        return list(session.exec(select(DomainBackend)))
+
+
+@pytest.mark.usefixtures("collected", "probe_net")
+def test_full_scan_remembers_backends_as_unconfirmed(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proof(monkeypatch, PROVEN)
+    monkeypatch.setattr(tasks, "discover_backends", discovery(RTDB, SUPABASE))
+    owner = uuid4()
+    domain = add_domain(db_engine, owner)
+
+    run_full_scan(str(add_full(db_engine, owner, domain)))
+
+    rows = saved_backends(db_engine)
+    assert {(row.kind, row.identifier) for row in rows} == {
+        (RTDB.kind, RTDB.identifier),
+        (SUPABASE.kind, SUPABASE.identifier),
+    }
+    assert all(row.domain_id == domain and row.confirmed_at is None for row in rows)
+
+
+@pytest.mark.usefixtures("collected", "probe_net")
+def test_rescan_keeps_a_confirmation_and_first_seen(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proof(monkeypatch, PROVEN)
+    monkeypatch.setattr(tasks, "discover_backends", discovery(SUPABASE))
+    owner = uuid4()
+    domain = add_domain(db_engine, owner)
+    run_full_scan(str(add_full(db_engine, owner, domain)))
+    with Session(db_engine) as session:
+        row = session.exec(select(DomainBackend)).one()
+        row.confirmed_at = utc_now()
+        session.add(row)
+        session.commit()
+        confirmed_at, first_seen = row.confirmed_at, row.first_seen_at
+
+    run_full_scan(str(add_full(db_engine, owner, domain)))
+
+    rows = saved_backends(db_engine)
+    assert len(rows) == 1
+    assert rows[0].confirmed_at == confirmed_at
+    assert rows[0].first_seen_at == first_seen
+
+
+@pytest.mark.usefixtures("collected", "probe_net")
+@pytest.mark.parametrize("result", [GONE, UNKNOWN])
+def test_no_discovery_without_proven_ownership(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch, result: OwnershipResult
+) -> None:
+    proof(monkeypatch, result)
+
+    def must_not_run(_ctx: ScanContext) -> ScanContext:
+        raise AssertionError("discovery ran without proven ownership")
+
+    monkeypatch.setattr(tasks, "discover_backends", must_not_run)
+    owner = uuid4()
+    scan_id = add_full(db_engine, owner, add_domain(db_engine, owner))
+
+    run_full_scan(str(scan_id))
+
+    assert load(db_engine, scan_id).status is ScanJobStatus.DONE
+    assert saved_backends(db_engine) == []
+
+
+@pytest.mark.usefixtures("collected")
+def test_quick_scan_never_discovers(db_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    def must_not_run(_ctx: ScanContext) -> ScanContext:
+        raise AssertionError("discovery ran in a quick scan")
+
+    monkeypatch.setattr(tasks, "discover_backends", must_not_run)
+    scan_id = add_scan(db_engine)
+
+    run_quick_scan(str(scan_id))
+
+    assert load(db_engine, scan_id).status is ScanJobStatus.DONE
