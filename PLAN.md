@@ -91,9 +91,10 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 
 **Step 3b: BaaS misconfiguration checks (verified domains only, read-only probes)**
 - [x] Discovery: Firebase and Supabase backends in the homepage and same-origin scripts, stored per domain. A server-only Supabase key in a script is critical
+- [x] "These are mine" confirmation on the My domains page
 - [ ] Firebase RTDB root readable → critical (stores yes/no + key count). Storage listing → high
 - [ ] Supabase tables named by `.from()` in scripts, checked with HEAD. Readable → high, with a per-table "meant to be public" option that makes it info and stops it affecting the grade
-- [ ] Plain-language fixes with rule snippets, and the "these are mine" UI
+- [ ] Plain-language fixes with rule snippets
 - Nothing is sent to a backend until the domain's owner confirms it's theirs, because a verified site's code can name someone else's project
 - Firestore isn't covered, because probing it needs collection names
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3b-2: backend confirmation screen
+
+**Added**
+- Verified domains on the My domains page now list the Firebase and Supabase backends a full scan found, each with "This is mine" and "Not mine". The section is hidden until a scan has found something.
+
+**Security**
+- The screen asks people to confirm only what they own or may test, because a site's code can name someone else's service.
+
 ## 2026-11-10: Phase 3, step 3b-1: BaaS discovery
 
 **Added**

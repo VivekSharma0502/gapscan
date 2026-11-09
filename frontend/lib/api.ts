@@ -101,6 +101,18 @@ export interface Domain {
   created_at: string;
 }
 
+export type BaasKind = "firebase_rtdb" | "firebase_storage" | "supabase";
+
+export interface DomainBackend {
+  id: string;
+  kind: BaasKind;
+  identifier: string;
+  // Nothing is sent to a backend until its domain's owner has confirmed it's theirs.
+  confirmed: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
 export interface VerifyFailure {
   method: VerificationMethod;
   code: string;
@@ -338,6 +350,30 @@ export function verifyDomain(id: string): Promise<VerifyResult> {
     `/api/domains/${encodeURIComponent(id)}/verify`,
     { method: "POST" },
     VERIFY_TIMEOUT_MS,
+  );
+}
+
+export function listBackends(
+  domainId: string,
+  signal?: AbortSignal,
+): Promise<DomainBackend[]> {
+  return request(`/api/domains/${encodeURIComponent(domainId)}/backends`, {
+    signal,
+  });
+}
+
+export function confirmBackend(
+  domainId: string,
+  backendId: string,
+  confirmed: boolean,
+): Promise<DomainBackend> {
+  return request(
+    `/api/domains/${encodeURIComponent(domainId)}/backends/${encodeURIComponent(backendId)}/confirm`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmed }),
+    },
   );
 }
 

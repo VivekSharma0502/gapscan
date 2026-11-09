@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { BadgeCheck, CircleDashed, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 
+import { DomainBackends } from "@/components/domains/domain-backends";
 import {
   RunFullScanButton,
   useFullScan,
@@ -228,6 +229,8 @@ export function DomainCard({ domain }: { domain: Domain }) {
           the moment. Open the details above for the reasons.
         </p>
       )}
+
+      {domain.verified && <DomainBackends domainId={domain.id} />}
 
       {verify.error && (
         <p role="alert" className="text-sm text-destructive">

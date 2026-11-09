@@ -31,8 +31,8 @@ TEXT: dict[str, CheckText] = {
                 "someone else, such as a vendor's widget."
             ),
             how_to_fix=(
-                "Nothing is wrong yet. Once you confirm which of these are yours, GapScan can "
-                "check whether their data is open to the public."
+                "Nothing is wrong yet. On the My domains page, mark the ones that are yours. "
+                "GapScan can then check whether their data is open to the public."
             ),
             backend=BackendFix(label="GapScan"),
         ),
