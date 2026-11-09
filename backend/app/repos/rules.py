@@ -68,10 +68,14 @@ _RULES: dict[str, SecretRule] = {
     "openai-api-key": SecretRule(
         Provider.OPENAI, Severity.HIGH, "sk-****", "OpenAI API key found in your code"
     ),
-    # Firebase web keys look like this and are public by design, so an alarm here would
-    # mostly be false. Firebase service accounts are caught by private-key above.
+    # Firebase web keys look like this and are public by design, but so do Gemini keys, which
+    # must stay secret. The value isn't kept, so this can't tell them apart and sits in the
+    # middle. Firebase service accounts are caught by private-key above.
     "gcp-api-key": SecretRule(
-        Provider.FIREBASE, Severity.LOW, "AIza****", "Google or Firebase API key found in your code"
+        Provider.FIREBASE,
+        Severity.MEDIUM,
+        "AIza****",
+        "Google or Firebase API key found in your code",
     ),
     # Includes Supabase anon keys, which are public by design.
     "jwt": _JWT,

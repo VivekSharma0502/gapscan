@@ -4,6 +4,7 @@ import json
 from collections.abc import Iterator
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import pytest
@@ -49,7 +50,24 @@ def test_notes_are_for_rules_that_exist(rule_id: str) -> None:
 
 @pytest.mark.parametrize("guide", GUIDES.values(), ids=lambda guide: guide.provider.value)
 def test_links_are_https(guide: Any) -> None:
-    assert guide.rotate_url is None or guide.rotate_url.startswith("https://")
+    for url in (guide.rotate_url, guide.docs_url):
+        assert url is None or url.startswith("https://")
+
+
+@pytest.mark.parametrize(
+    ("provider", "host"),
+    [
+        (Provider.AWS, "docs.aws.amazon.com"),
+        (Provider.FIREBASE, "firebase.google.com"),
+        (Provider.SUPABASE, "supabase.com"),
+        (Provider.STRIPE, "docs.stripe.com"),
+        (Provider.GITHUB, "docs.github.com"),
+        (Provider.OPENAI, "developers.openai.com"),
+    ],
+    ids=lambda item: getattr(item, "value", item),
+)
+def test_each_provider_links_its_official_docs(provider: Provider, host: str) -> None:
+    assert urlparse(GUIDES[f"secrets.{provider.value}"].docs_url).hostname == host
 
 
 def _position(steps: tuple[str, ...], word: str) -> int:
@@ -57,12 +75,24 @@ def _position(steps: tuple[str, ...], word: str) -> int:
 
 
 @pytest.mark.parametrize(
-    "provider", [Provider.AWS, Provider.OPENAI, Provider.GENERIC], ids=lambda item: item.value
+    ("provider", "removal"),
+    [
+        (Provider.AWS, "deactivate"),
+        (Provider.FIREBASE, "delete the previous"),
+        (Provider.OPENAI, "revoke"),
+        (Provider.GENERIC, "delete"),
+    ],
+    ids=lambda item: getattr(item, "value", item),
 )
-def test_new_key_goes_live_before_the_old_one_is_removed(provider: Provider) -> None:
+def test_new_key_goes_live_before_the_old_one_is_removed(provider: Provider, removal: str) -> None:
     steps = GUIDES[f"secrets.{provider.value}"].rotate_steps
 
-    assert _position(steps, "redeploy") < _position(steps, "delete")
+    assert _position(steps, "redeploy") < _position(steps, removal)
+
+
+def test_firebase_guide_warns_that_gemini_keys_are_secret() -> None:
+    assert "Gemini" in GUIDES["secrets.firebase"].what_it_means
+    assert "Gemini" in RULE_NOTES["gcp-api-key"]
 
 
 def test_history_warning_says_to_rotate_first() -> None:
@@ -199,7 +229,7 @@ def test_most_serious_come_first_with_counts(client: TestClient, db_engine: Engi
     owner, repo = seed(db_engine)
     scan = add_scan(db_engine, owner, repo)
     add_finding(db_engine, scan, repo, "generic-api-key")
-    add_finding(db_engine, scan, repo, "gcp-api-key")
+    add_finding(db_engine, scan, repo, "jwt")
     add_finding(db_engine, scan, repo, "private-key")
     sign_in(owner)
 
@@ -208,7 +238,7 @@ def test_most_serious_come_first_with_counts(client: TestClient, db_engine: Engi
     assert [item["rule_id"] for item in body["findings"]] == [
         "private-key",
         "generic-api-key",
-        "gcp-api-key",
+        "jwt",
     ]
     assert body["counts"] == {"critical": 1, "high": 0, "medium": 1, "low": 1, "info": 0}
 

@@ -23,6 +23,8 @@ class SecretGuide(BaseModel):
     rotate_steps: tuple[str, ...]
     # Where to do it. None when it depends on which service the key belongs to.
     rotate_url: str | None
+    # The provider's own instructions, so people can check ours against the source.
+    docs_url: str | None
 
 
 _GUIDES = (
@@ -30,37 +32,49 @@ _GUIDES = (
         provider=Provider.AWS,
         provider_name="AWS",
         what_it_means=(
-            "This key lets whoever holds it act as this AWS user. Stolen AWS keys are found by "
-            "automated scanners within minutes and are often used to run up large bills."
+            "This key lets whoever holds it act as this AWS user. Exposed AWS keys are a common "
+            "target and can be used to run up large bills."
         ),
         rotate_steps=(
-            "In the AWS IAM console, open the user this key belongs to, then Security credentials.",
-            "Create a new access key.",
+            "In the IAM console, choose Users, open the user this key belongs to, then the "
+            "Security credentials tab.",
+            "Under Access keys, choose Create access key, then Other. A user can only have two "
+            "access keys, so remove an unused one first if needed. The secret is only shown once.",
             "Put the new key everywhere your app uses it, as an environment variable or in a "
             "secrets manager, and redeploy.",
-            "Mark the old key Inactive and check that nothing breaks, then delete it.",
-            "Check CloudTrail and your billing page for activity you don't recognize.",
+            "On the old key, choose Actions, then Deactivate. If something stops working, it "
+            "still needs the new key.",
+            "Once everything works, choose Actions, then Delete on the old key.",
+            "Review CloudTrail and your bill for activity you don't recognize. Where you can, "
+            "replace long-term keys with temporary credentials such as IAM roles.",
         ),
-        rotate_url="https://console.aws.amazon.com/iam/home#/users",
+        rotate_url="https://console.aws.amazon.com/iam/",
+        docs_url="https://docs.aws.amazon.com/IAM/latest/UserGuide/id-credentials-access-keys-update.html",
     ),
     SecretGuide(
         provider=Provider.FIREBASE,
         provider_name="Firebase / Google",
         what_it_means=(
-            "Google API keys identify your project. A Firebase web key is meant to be in your "
-            "front-end code, so it isn't a leak by itself, and your Security Rules are what "
-            "protect the data. Other Google API keys can cost you money if they're abused."
+            "Google API keys all look alike. A Firebase web key only identifies your app and is "
+            "fine in front-end code, because Security Rules and App Check protect your data, not "
+            "the key. Others aren't safe to expose: a Gemini API key must never be in your code, "
+            "and other exposed keys can lead to unexpected charges."
         ),
         rotate_steps=(
-            "In Google Cloud, open APIs & Services, then Credentials, and find this key.",
-            "If it's a Firebase web key, keep it, but restrict it to your app's domains and "
-            "only the APIs it needs.",
-            "Check that your Firestore, Realtime Database and Storage rules don't allow "
-            "public access.",
-            "If it's any other key, create a new restricted one, put it in your app and "
-            "redeploy, then delete the old one.",
+            "In the Google Cloud console, open APIs & Services, then Credentials, and find this "
+            "key.",
+            "If its name mentions Gemini, or its API restrictions include the Generative Language "
+            "API, it's a secret and needs replacing. So does any key that isn't for Firebase.",
+            "To replace it, click its name, then Rotate key, and confirm the name and "
+            "restrictions. Put the new key in your server's environment and redeploy.",
+            "Return to the new key's details and click Delete the previous key.",
+            "If it's a Firebase web key, you can keep it. Under API restrictions choose Restrict "
+            "key and allow only the Firebase APIs your app uses.",
+            "Don't rely on the key for protection. Check that your Firestore, Realtime Database "
+            "and Storage rules don't allow public access, and consider App Check.",
         ),
         rotate_url="https://console.cloud.google.com/apis/credentials",
+        docs_url="https://firebase.google.com/docs/projects/api-keys",
     ),
     SecretGuide(
         provider=Provider.SUPABASE,
@@ -82,6 +96,7 @@ _GUIDES = (
             "Check your tables and auth logs for changes you don't recognize.",
         ),
         rotate_url="https://supabase.com/dashboard/project/_/settings/api-keys",
+        docs_url="https://supabase.com/docs/guides/security/rotate-leaked-api-keys",
     ),
     SecretGuide(
         provider=Provider.STRIPE,
@@ -101,25 +116,30 @@ _GUIDES = (
             "for anything you don't recognize.",
         ),
         rotate_url="https://dashboard.stripe.com/apikeys",
+        docs_url="https://docs.stripe.com/keys#rolling-keys",
     ),
     SecretGuide(
         provider=Provider.GITHUB,
         provider_name="GitHub",
         what_it_means=(
-            "This token can act as you on GitHub, up to whatever it was allowed to do. That "
-            "can include reading private code or pushing changes to it."
+            "This token can act as you on GitHub, up to whatever it was allowed to do. That can "
+            "include reading private code or pushing changes to it. GitHub automatically revokes "
+            "a valid token pushed to a public repository, so it may already have stopped working "
+            "if this repo is public. Replace it either way."
         ),
         rotate_steps=(
-            "Open GitHub's token settings and delete this token. Delete it right away, since "
-            "you can create a new one in a moment.",
-            "If it isn't listed there, it belongs to an app. Revoke that app's access under "
-            "Settings, then Applications.",
-            "Create a new token with only the permissions and repositories it needs, and a "
-            "short expiry.",
+            "On GitHub, open Settings, Developer settings, then Personal access tokens. Under "
+            "Fine-grained tokens or Tokens (classic), click Delete next to this token. Do this "
+            "right away, since a new one takes moments to create.",
+            "If it isn't listed there, it belongs to an app. Under Settings, then Applications, "
+            "revoke it on the Authorized OAuth Apps or Authorized GitHub Apps tab.",
+            "Create a replacement as a fine-grained token, with only the repositories and "
+            "permissions it needs, and an expiration date.",
             "Put the new token where it's used and redeploy.",
-            "Check your account's security log and recent commits for anything unexpected.",
+            "Check the Security log in your Settings, and recent commits, for anything unexpected.",
         ),
         rotate_url="https://github.com/settings/tokens",
+        docs_url="https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens",
     ),
     SecretGuide(
         provider=Provider.OPENAI,
@@ -128,13 +148,17 @@ _GUIDES = (
             "Anyone with this key can make OpenAI API calls that are billed to your account."
         ),
         rotate_steps=(
-            "On OpenAI's API keys page, create a new secret key.",
+            "On the API keys page of your OpenAI dashboard, create a replacement. For an app, "
+            "prefer a project service account key, and set an expiration date.",
             "Put it in your server's environment and redeploy.",
-            "Delete the old key on the same page.",
-            "Check your usage page for spending you don't recognize, and set a monthly budget "
-            "limit.",
+            "Once the replacement works, revoke the old key on the same page. This takes effect "
+            "within a few seconds.",
+            "Check the Usage page for spending you don't recognize, and add a spend alert on the "
+            "Limits page. A hard spend limit also works, but it stops your API traffic when "
+            "reached.",
         ),
-        rotate_url="https://platform.openai.com/api-keys",
+        rotate_url="https://platform.openai.com/settings/organization/api-keys",
+        docs_url="https://developers.openai.com/api/docs/guides/production-best-practices",
     ),
     SecretGuide(
         provider=Provider.GENERIC,
@@ -151,6 +175,7 @@ _GUIDES = (
             "Check that service's logs for activity you don't recognize.",
         ),
         rotate_url=None,
+        docs_url=None,
     ),
 )
 
@@ -165,7 +190,8 @@ RULE_NOTES: dict[str, str] = {
         "replacing now."
     ),
     "gcp-api-key": (
-        "Firebase web keys are designed to be public, so this is low risk if that's what this is."
+        "Firebase web keys are designed to be public, so this is low risk if that's what this "
+        "is. A Gemini API key looks identical and must stay secret, so check which one it is."
     ),
     "jwt": (
         "Often harmless: a Supabase anon key looks like this and is designed to be public. It "
@@ -181,7 +207,9 @@ RULE_NOTES: dict[str, str] = {
     ),
     "private-key": (
         "Replace the whole key pair and remove the old public key wherever it's trusted. If this "
-        "came from a Firebase or Google service account file, generate a new key under Project "
-        "settings, then Service accounts, and delete the old one in Google Cloud."
+        "came from a Firebase or Google service account file, open Settings, then Service "
+        "accounts in the Firebase console, and click Generate New Private Key. Once your app uses "
+        "it, delete the old one in Google Cloud: Service accounts, the account's email, the Keys "
+        "tab, then Delete."
     ),
 }

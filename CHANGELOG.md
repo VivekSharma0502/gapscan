@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-09: Phase 3, step 3a-5: rotation guides checked against official docs
+
+**Changed**
+- Every provider's guide now links its official instructions (`docs_url`), and all six were checked against those docs.
+- AWS: exact console steps, the limit of two keys per user, and a recommendation to move to temporary credentials.
+- Google: uses the Rotate key flow, and warns that Gemini API keys look like Firebase web keys but must stay secret.
+- GitHub: exact navigation, fine-grained tokens as the replacement, and a note that GitHub auto-revokes tokens pushed to public repositories.
+- OpenAI: revokes rather than deletes, recommends project service accounts and expiry dates, and replaces "monthly budget" with spend alerts and hard limits.
+
+**Security**
+- New `gcp-api-key` findings are medium instead of low, because once the value isn't kept a secret Gemini key can't be told apart from a public Firebase key. Findings already stored keep their severity.
+
 ## 2026-11-09: Phase 3, step 3a-5: plain-language findings and rotation guides
 
 **Added**

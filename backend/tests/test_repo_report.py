@@ -146,8 +146,8 @@ def test_most_serious_findings_survive_the_cap(monkeypatch: pytest.MonkeyPatch) 
         ("supabase-service-role-jwt", Provider.SUPABASE, Severity.CRITICAL, "eyJ****"),
         ("private-key", Provider.GENERIC, Severity.CRITICAL, "-----BEGIN ****"),
         ("openai-api-key", Provider.OPENAI, Severity.HIGH, "sk-****"),
-        # Public by design, so a loud alarm would be a false one.
-        ("gcp-api-key", Provider.FIREBASE, Severity.LOW, "AIza****"),
+        # Could be a public Firebase key or a secret Gemini key, which look identical.
+        ("gcp-api-key", Provider.FIREBASE, Severity.MEDIUM, "AIza****"),
         ("jwt", Provider.GENERIC, Severity.LOW, "eyJ****"),
         ("generic-api-key", Provider.GENERIC, Severity.MEDIUM, "****"),
         ("some-other-service", Provider.GENERIC, Severity.HIGH, "****"),
