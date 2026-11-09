@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-11-09: Phase 3, step 3a-5: plain-language findings and rotation guides
+
+**Added**
+- "How to replace this key" guides for AWS, Firebase/Google, Supabase, Stripe, GitHub, OpenAI and anything else, in code and keyed by `check_id` like the website checks. Each one puts the new key live before removing the old one, so an app stays up. GitHub tokens are the exception: delete first, because a new one takes moments to create.
+- Notes for cases a provider's guide can't cover. Firebase web keys and Supabase anon keys are public by design, `sk_test_` Stripe keys are much less urgent, and name-based matches may be placeholders.
+- `GET /api/repos/{id}/findings`: masked findings, most serious first, with first-seen dates, counts by severity and the latest scan. The page arrives in the next step.
+- Every repo's findings come with a warning that deleting a file doesn't remove a secret from git history, so the key must be replaced first.
+
+**Security**
+- Findings are owner only, and another user's repo returns 404. The response is a fixed list of fields, so the stored fingerprint isn't sent.
+
+**Decisions**
+- Advice is worded conditionally ("if this key starts with sk_test_"), because the real value is never kept and GapScan can't check which case it is.
+
 ## 2026-11-09: Phase 3, step 3a-4: gitleaks repo scanner
 
 **Added**

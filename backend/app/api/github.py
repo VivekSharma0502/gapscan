@@ -2,6 +2,7 @@
 
 import logging
 import secrets
+from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Annotated
@@ -13,7 +14,16 @@ from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from app.api.scans import SessionDep, SignedInDep, enqueue_scan, hash_token, lock_target
+from app.api.scans import (
+    ScanSummary,
+    SessionDep,
+    SignedInDep,
+    enqueue_scan,
+    hash_token,
+    lock_target,
+    scan_summary,
+)
+from app.checks.base import Severity
 from app.core.auth import (
     AuthUnavailableError,
     ensure_profile,
@@ -37,12 +47,14 @@ from app.models.github import GithubInstallation, GithubInstallState, Repo
 from app.models.scan import (
     REPO_SCAN_STALE_AFTER,
     UNFINISHED_STATUSES,
+    FindingRecord,
     Scan,
     ScanJobStatus,
     ScanMode,
     TargetType,
     utc_now,
 )
+from app.repos.guides import GUIDES, HISTORY_WARNING, RULE_NOTES, SecretGuide
 from app.workers.tasks import initial_repo_progress, run_repo_scan
 
 logger = logging.getLogger(__name__)
@@ -55,6 +67,8 @@ REPO_SCAN_RATE_LIMIT = "5/minute"
 HOURLY_FULL_REPO_SCAN_CAP = 10
 INSTALL_STATE_LIFETIME = timedelta(minutes=10)
 MAX_POSTGRES_BIGINT = 2**63 - 1
+
+_SEVERITY_ORDER = list(Severity)
 
 _NOT_CONFIGURED = "Connecting GitHub isn't available right now."
 _GITHUB_UNAVAILABLE = "We couldn't reach GitHub. Please try connecting again."
@@ -102,6 +116,60 @@ class RepoOut(BaseModel):
     is_private: bool
     account_login: str
     created_at: datetime
+
+
+class RepoFindingOut(BaseModel):
+    # Security: a fixed list of fields. The stored fingerprint isn't needed by the page.
+    id: UUID
+    severity: Severity
+    title: str
+    rule_id: str
+    file_path: str
+    line: int
+    commit_sha: str
+    masked: str
+    # A rescan keeps the original row, so this is when the secret was first found.
+    first_seen_at: datetime
+    # Extra advice for this exact rule, where its provider's guide doesn't cover it.
+    note: str | None
+    # None only if a stored finding's guide has since been removed.
+    guide: SecretGuide | None
+
+
+class RepoLatestScan(ScanSummary):
+    incomplete_reason: str | None
+
+
+class RepoFindingsOut(BaseModel):
+    id: UUID
+    full_name: str
+    is_private: bool
+    history_warning: str
+    latest_scan: RepoLatestScan | None
+    counts: dict[Severity, int]
+    findings: list[RepoFindingOut]
+
+
+def _repo_finding_out(record: FindingRecord) -> RepoFindingOut:
+    return RepoFindingOut(
+        id=record.id,
+        severity=record.severity,
+        title=record.title,
+        rule_id=record.rule_id,
+        file_path=record.file_path,
+        line=record.line,
+        commit_sha=record.commit_sha,
+        masked=record.evidence_masked,
+        first_seen_at=record.created_at,
+        note=RULE_NOTES.get(record.rule_id),
+        guide=GUIDES.get(record.check_id),
+    )
+
+
+def _latest_scan_out(scan: Scan) -> RepoLatestScan:
+    return RepoLatestScan(
+        **scan_summary(scan, utc_now()).model_dump(), incomplete_reason=scan.incomplete_reason
+    )
 
 
 def _unavailable(status_code: int, detail: str, exc: Exception) -> HTTPException:
@@ -390,6 +458,37 @@ def start_repo_scan(
     session.commit()
     enqueue_scan(session, scan_id, run_repo_scan)
     return RepoScanCreated(id=scan_id, status=scan_status, reused=False)
+
+
+@router.get("/repos/{repo_id}/findings", response_model=RepoFindingsOut)
+def list_repo_findings(repo_id: UUID, session: SessionDep, viewer: SignedInDep) -> RepoFindingsOut:
+    repo = _owned_repo(session, repo_id, viewer.id)
+    records = sorted(
+        session.exec(select(FindingRecord).where(FindingRecord.repo_id == repo.id)),
+        key=lambda record: (
+            _SEVERITY_ORDER.index(record.severity),
+            record.file_path or "",
+            record.line or 0,
+        ),
+    )
+    # Security: owner_id as well as repo_id, so a scan can't be shown to anyone but its owner.
+    latest = session.exec(
+        select(Scan)
+        .where(Scan.repo_id == repo.id, Scan.owner_id == viewer.id)
+        .order_by(Scan.created_at.desc(), Scan.id.desc())
+        .limit(1)
+    ).first()
+
+    counts = Counter(record.severity for record in records)
+    return RepoFindingsOut(
+        id=repo.id,
+        full_name=repo.full_name,
+        is_private=repo.is_private,
+        history_warning=HISTORY_WARNING,
+        latest_scan=_latest_scan_out(latest) if latest is not None else None,
+        counts={severity: counts[severity] for severity in Severity},
+        findings=[_repo_finding_out(record) for record in records],
+    )
 
 
 @router.get("/repos", response_model=list[RepoOut])
