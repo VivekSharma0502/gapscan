@@ -104,4 +104,12 @@ def attach_probes(ctx: ScanContext) -> ScanContext:
 
 
 def without_probes(ctx: ScanContext, reason: str) -> ScanContext:
-    return replace(ctx, skip_reasons={**ctx.skip_reasons, Input.PROBES: reason, Input.BAAS: reason})
+    return replace(
+        ctx,
+        skip_reasons={
+            **ctx.skip_reasons,
+            Input.PROBES: reason,
+            Input.BAAS: reason,
+            Input.BAAS_PROBES: reason,
+        },
+    )

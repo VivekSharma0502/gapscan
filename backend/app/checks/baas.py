@@ -1,16 +1,18 @@
 """Active checks on the backends a verified site uses.
 
-Security: evidence is built only from fixed masks, script paths on the verified site and
-validated backend names, so no key or data value can reach the database.
+Security: evidence is built only from fixed masks, script paths on the verified site,
+validated backend names and counts, so no key or data value can reach the database.
 """
 
 from app.checks.base import (
     BaasDiscovery,
     BaasKind,
+    BaasProbes,
     Category,
     DiscoveredBackend,
     Finding,
     Input,
+    RtdbProbe,
     ScanContext,
     Severity,
     SkipCheck,
@@ -18,6 +20,8 @@ from app.checks.base import (
 from app.checks.registry import check, make_finding
 
 MAX_LOCATIONS = 5
+
+_NO_RELIABLE_ANSWER = "This backend gave no reliable answer, so this could not be confirmed."
 
 _KIND_LABELS = {
     BaasKind.FIREBASE_RTDB: "Firebase database",
@@ -64,3 +68,46 @@ def backends_found(ctx: ScanContext) -> Finding | None:
     names = "; ".join(_describe(item) for item in baas.backends)
     summary = names if names else "No Firebase or Supabase backends found."
     return make_finding("baas.backends_found", Severity.INFO, f"{summary} {_coverage(baas)}")
+
+
+def _probes(ctx: ScanContext) -> BaasProbes:
+    # The runner only calls these checks once this input has been collected.
+    assert ctx.baas_probes is not None  # noqa: S101
+    return ctx.baas_probes
+
+
+def _describe_rtdb(probe: RtdbProbe) -> str:
+    if probe.key_count is None:
+        return f"{probe.host} (more top-level keys than we count)"
+    return f"{probe.host} ({probe.key_count} top-level keys)"
+
+
+@check("baas.firebase_rtdb_public", Category.BAAS, requires=[Input.BAAS_PROBES], active=True)
+def firebase_rtdb_public(ctx: ScanContext) -> Finding | None:
+    probes = _probes(ctx).rtdb
+    readable = [probe for probe in probes if probe.readable]
+    if readable:
+        names = "; ".join(_describe_rtdb(probe) for probe in readable)
+        return make_finding(
+            "baas.firebase_rtdb_public",
+            Severity.CRITICAL,
+            f"Readable by anyone, without signing in: {names}.",
+        )
+    if any(probe.readable is None for probe in probes):
+        raise SkipCheck(_NO_RELIABLE_ANSWER)
+    return None
+
+
+@check("baas.firebase_storage_listable", Category.BAAS, requires=[Input.BAAS_PROBES], active=True)
+def firebase_storage_listable(ctx: ScanContext) -> Finding | None:
+    probes = _probes(ctx).storage
+    listable = [probe.bucket for probe in probes if probe.listable]
+    if listable:
+        return make_finding(
+            "baas.firebase_storage_listable",
+            Severity.HIGH,
+            f"Anyone can list the files in: {'; '.join(listable)}.",
+        )
+    if any(probe.listable is None for probe in probes):
+        raise SkipCheck(_NO_RELIABLE_ANSWER)
+    return None

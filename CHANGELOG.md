@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3b-3: Firebase probes
+
+**Added**
+- `baas.firebase_rtdb_public` (critical): the database root can be read without signing in. Stores yes/no and the number of top-level keys.
+- `baas.firebase_storage_listable` (high): a bucket's files can be listed without signing in. Stores yes/no.
+- Both come with per-user rule snippets from Firebase's docs. Restart the worker to pick them up.
+
+**Security**
+- Only GET requests, through the SSRF guard, to official hosts, and redirects can't leave that host. Each name is validated again when it's read back from the database.
+- A backend is probed only if its owner confirmed it and this scan found it on the site.
+- RTDB uses `shallow=true`, so stored values are never returned, and key names are counted and discarded. Storage asks for at most one file and doesn't read its name.
+- A response is reduced to a yes/no and a count as soon as it arrives, so data can't reach a finding, the database or a log. Results have no field that could hold it.
+- A backend that gave no reliable answer leaves the check skipped, not clear.
+
+**Docs**
+- `PLAN.md` has a TODO for linking sign-in methods on one account.
+
 ## 2026-11-10: Phase 3, step 3b-2: backend confirmation screen
 
 **Added**

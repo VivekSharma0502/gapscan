@@ -52,12 +52,20 @@ def _rtdb_host(database_url: str) -> str | None:
     if parts.scheme != "https" or parts.username or port or parts.path not in ("", "/"):
         return None
     host = (parts.hostname or "").lower()
-    return host if any(pattern.fullmatch(host) for pattern in _RTDB_HOST_RES) else None
+    return host if is_official_rtdb_host(host) else None
+
+
+def is_official_rtdb_host(host: str) -> bool:
+    return any(pattern.fullmatch(host) for pattern in _RTDB_HOST_RES)
+
+
+def is_valid_bucket(name: str) -> bool:
+    return _BUCKET_RE.fullmatch(name) is not None and ".." not in name
 
 
 def _bucket_name(value: str) -> str | None:
     name = value.removeprefix("gs://").lower()
-    return name if _BUCKET_RE.fullmatch(name) and ".." not in name else None
+    return name if is_valid_bucket(name) else None
 
 
 def _firebase_backends(text: str) -> set[DiscoveredBackend]:

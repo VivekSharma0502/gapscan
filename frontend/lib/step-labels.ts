@@ -42,9 +42,12 @@ const STEP_LABELS: Record<string, string> = {
   ownership_check: "Confirm domain ownership",
   active_probes: "Request sensitive paths",
   baas_discovery: "Read the site's scripts",
+  baas_probes: "Check confirmed backends",
 
   "baas.supabase_service_key": "Supabase keys in scripts",
   "baas.backends_found": "Backends used by the site",
+  "baas.firebase_rtdb_public": "Firebase database rules",
+  "baas.firebase_storage_listable": "Firebase storage rules",
 
   "exposure.env_file": "Environment files",
   "exposure.git_directory": "Git folder",

@@ -659,3 +659,63 @@ def test_quick_scan_never_discovers(db_engine: Engine, monkeypatch: pytest.Monke
     run_quick_scan(str(scan_id))
 
     assert load(db_engine, scan_id).status is ScanJobStatus.DONE
+
+
+# --- probing confirmed backends ---
+
+
+class RecordingProbe:
+    def __init__(self) -> None:
+        self.confirmed: list[set[DiscoveredBackend]] = []
+
+    def __call__(self, ctx: ScanContext, confirmed: Any) -> ScanContext:
+        self.confirmed.append(set(confirmed))
+        return ctx
+
+
+def set_confirmed(engine: Engine, identifier: str) -> None:
+    with Session(engine) as session:
+        row = session.exec(
+            select(DomainBackend).where(DomainBackend.identifier == identifier)
+        ).one()
+        row.confirmed_at = utc_now()
+        session.add(row)
+        session.commit()
+
+
+@pytest.mark.usefixtures("collected", "probe_net")
+def test_only_confirmed_backends_are_passed_to_the_probes(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proof(monkeypatch, PROVEN)
+    monkeypatch.setattr(tasks, "discover_backends", discovery(RTDB, SUPABASE))
+    recorder = RecordingProbe()
+    monkeypatch.setattr(tasks, "probe_backends", recorder)
+    owner = uuid4()
+    domain = add_domain(db_engine, owner)
+    run_full_scan(str(add_full(db_engine, owner, domain)))
+    assert recorder.confirmed == [set()]
+
+    set_confirmed(db_engine, RTDB.identifier)
+    run_full_scan(str(add_full(db_engine, owner, domain)))
+
+    assert recorder.confirmed[1] == {RTDB}
+
+
+@pytest.mark.usefixtures("collected", "probe_net")
+@pytest.mark.parametrize("result", [GONE, UNKNOWN])
+def test_no_probes_without_proven_ownership(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch, result: OwnershipResult
+) -> None:
+    proof(monkeypatch, result)
+
+    def must_not_run(_ctx: ScanContext, _confirmed: Any) -> ScanContext:
+        raise AssertionError("probes ran without proven ownership")
+
+    monkeypatch.setattr(tasks, "probe_backends", must_not_run)
+    owner = uuid4()
+    scan_id = add_full(db_engine, owner, add_domain(db_engine, owner))
+
+    run_full_scan(str(scan_id))
+
+    assert load(db_engine, scan_id).status is ScanJobStatus.DONE

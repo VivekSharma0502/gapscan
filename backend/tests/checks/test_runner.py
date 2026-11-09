@@ -78,6 +78,8 @@ EXPECTED_CHECKS = {
     "exposure.directory_listing",
     "baas.supabase_service_key",
     "baas.backends_found",
+    "baas.firebase_rtdb_public",
+    "baas.firebase_storage_listable",
 }
 
 

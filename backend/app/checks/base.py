@@ -126,6 +126,8 @@ class Input(StrEnum):
     PROBES = "probes"
     # Backends named in the site's own code. Only ever collected for a verified domain.
     BAAS = "baas"
+    # Read-only answers from backends the domain's owner confirmed as theirs.
+    BAAS_PROBES = "baas_probes"
 
 
 class BaasKind(StrEnum):
@@ -163,6 +165,35 @@ class BaasDiscovery:
     scripts_failed: int
 
 
+@dataclass(frozen=True)
+class RtdbProbe:
+    """What a database's rules allow.
+
+    Security: a yes/no and a number. There is no field that could hold a key name or a value.
+    """
+
+    host: str
+    # None when the database gave no reliable answer.
+    readable: bool | None
+    # Top-level keys. None when not readable, or when there were too many to count.
+    key_count: int | None = None
+
+
+@dataclass(frozen=True)
+class StorageProbe:
+    """Whether a bucket's files can be listed. Security: file names are never kept."""
+
+    bucket: str
+    # None when the bucket gave no reliable answer.
+    listable: bool | None
+
+
+@dataclass(frozen=True)
+class BaasProbes:
+    rtdb: tuple[RtdbProbe, ...] = ()
+    storage: tuple[StorageProbe, ...] = ()
+
+
 class SkipCheck(Exception):
     """Raised by a check that has its inputs but still cannot give a reliable answer."""
 
@@ -195,6 +226,7 @@ class ScanContext:
     probes: Mapping[str, Probe] | None = None
     # None unless ownership was confirmed for this scan.
     baas: BaasDiscovery | None = None
+    baas_probes: BaasProbes | None = None
     # Set when the hostname sits under a domain shared by many customers, like vercel.app.
     shared_platform_suffix: str | None = None
     # Why an input is missing, shown to the user next to the checks it prevented.

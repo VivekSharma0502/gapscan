@@ -11,7 +11,8 @@ from sqlmodel import select, update
 
 from app.checks.active_collector import attach_probes, without_probes
 from app.checks.baas_collector import discover_backends
-from app.checks.base import BaasDiscovery, Category
+from app.checks.baas_probes import probe_backends
+from app.checks.base import BaasDiscovery, Category, DiscoveredBackend
 from app.checks.collector import COLLECT_STEPS, collect_context
 from app.checks.ownership import prove_ownership
 from app.checks.runner import ScanReport, ScanStatus, run_checks, selected_checks
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 OWNERSHIP_STEP = "ownership_check"
 PROBE_STEP = "active_probes"
 BAAS_STEP = "baas_discovery"
+BAAS_PROBE_STEP = "baas_probes"
 
 _NOT_VERIFIED_REASON = "This domain isn't verified, so these checks did not run."
 _PROOF_GONE_REASON = (
@@ -63,7 +65,7 @@ def initial_quick_progress() -> dict[str, Any]:
 
 
 def initial_full_progress() -> dict[str, Any]:
-    total = len(COLLECT_STEPS) + 3 + len(selected_checks(allow_active=True))
+    total = len(COLLECT_STEPS) + 4 + len(selected_checks(allow_active=True))
     return _progress(0, total, None)
 
 
@@ -346,6 +348,19 @@ def _remember_backends(scan_id: UUID, baas: BaasDiscovery | None) -> None:
         session.commit()
 
 
+def _confirmed_backends(scan_id: UUID) -> set[DiscoveredBackend]:
+    with new_session() as session:
+        domain_id = session.get_one(Scan, scan_id).domain_id
+        if domain_id is None:
+            return set()
+        rows = session.exec(
+            select(DomainBackend).where(
+                DomainBackend.domain_id == domain_id, DomainBackend.confirmed_at.is_not(None)
+            )
+        )
+        return {DiscoveredBackend(row.kind, row.identifier) for row in rows}
+
+
 @celery_app.task(name="scans.run_full")
 def run_full_scan(scan_id: str) -> None:
     """Run the passive and active checks on a verified domain the scan's owner controls."""
@@ -371,6 +386,9 @@ def run_full_scan(scan_id: str) -> None:
         if not problem:
             context = discover_backends(context)
             _remember_backends(job_id, context.baas)
+        on_step(BAAS_PROBE_STEP)
+        if not problem:
+            context = probe_backends(context, _confirmed_backends(job_id))
         # After a problem there are no probes, so the active checks report skipped, not passed.
         report = run_checks(context, on_step=on_step, allow_active=True)
         _save_report(job_id, report, total, finished)

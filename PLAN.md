@@ -92,7 +92,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 **Step 3b: BaaS misconfiguration checks (verified domains only, read-only probes)**
 - [x] Discovery: Firebase and Supabase backends in the homepage and same-origin scripts, stored per domain. A server-only Supabase key in a script is critical
 - [x] "These are mine" confirmation on the My domains page
-- [ ] Firebase RTDB root readable → critical (stores yes/no + key count). Storage listing → high
+- [x] Firebase RTDB root readable → critical (stores yes/no + key count). Storage listing → high
 - [ ] Supabase tables named by `.from()` in scripts, checked with HEAD. Readable → high, with a per-table "meant to be public" option that makes it info and stops it affecting the grade
 - [ ] Plain-language fixes with rule snippets
 - Nothing is sent to a backend until the domain's owner confirms it's theirs, because a verified site's code can name someone else's project
@@ -111,6 +111,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 
 ### Phase 5 — Monetize + polish (later)
 - Razorpay plans, agency white-label (logo/name on PDF), Hindi/Gujarati report text, team members
+- TODO: link sign-in methods, so GitHub and a magic link can share one account. Today Supabase only links them when the emails match, so a magic link to a different address creates a second account with its own domains
 
 ---
 
