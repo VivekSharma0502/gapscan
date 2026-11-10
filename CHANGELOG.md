@@ -5,6 +5,7 @@
 **Changed**
 - The remaining ScanKit names are now GapScan: the Celery app, browser storage keys, and the local Postgres user, password and database. Browser storage resets once, so the theme choice and any unclaimed scans are lost.
 - An existing local database keeps its old name, because Postgres only reads those settings on first start. To keep it, set `DATABASE_URL` in `.env` to the old `scankit` values.
+- The scanner's default User-Agent now links to the public repository. Anyone self-hosting should set `SCANNER_USER_AGENT` to a page of their own.
 
 **Decisions**
 - The `scankit-verify` DNS and file names stay accepted, because removing them would unverify domains set up that way.

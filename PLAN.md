@@ -200,7 +200,7 @@ A confirmed admin key for a backend the site uses, leaked in one of the owner's 
 - Never store or log full secrets; mask everything
 - GitHub App private key in env only; use short-lived installation tokens, don't store user tokens
 - Verify webhook signatures; validate all input with Pydantic; locked-down CORS
-- Scanner sends an honest User-Agent with a link to an "about our scanner" page: `GapScanBot/1.0 (+https://viivek.xyz/bot)`
+- Scanner sends an honest User-Agent with a link to an "about our scanner" page: `GapScanBot/1.0 (+https://github.com/VivekSharma0502/gapscan)`. Self-hosters set their own link with `SCANNER_USER_AGENT`
 - Polite scanning: at most about 2 requests a second per host, a small random delay between active checks, and the first bot-protection challenge ends the scan's requests to that site
 
 ## Pricing (draft, Phase 5)

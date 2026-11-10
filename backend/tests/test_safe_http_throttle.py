@@ -220,7 +220,7 @@ def test_default_user_agent_is_clear_and_links_to_an_explanation(
 
     agent = Settings(_env_file=None).scanner_user_agent
 
-    assert agent == "GapScanBot/1.0 (+https://viivek.xyz/bot)"
+    assert agent == "GapScanBot/1.0 (+https://github.com/VivekSharma0502/gapscan)"
 
 
 def test_requests_carry_the_user_agent(
