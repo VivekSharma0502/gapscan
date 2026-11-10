@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3b: Supabase probes
+
+**Added**
+- `baas.supabase_table_readable` (high): a table named by `.from()` in the site's scripts returned rows to its public key. Comes with an "enable RLS and add a policy" SQL snippet. Run `alembic upgrade head`, and restart the worker.
+- A "This table is meant to be public" option per table on My domains. A marked table becomes info and stops affecting the grade from the next full scan.
+- An explicit "Checked: tables returned no rows to the public" result, which says an empty table looks the same as a protected one.
+
+**Security**
+- HEAD requests only, so no row ever leaves Supabase. Only table names and their state are stored.
+- Only the anon or publishable key from the site's own code is sent, held in memory for that scan and never stored. A service_role or secret key found in a bundle is never used.
+- An anon key must name the same project as the URL. A publishable key names none, so it's only used when the site has exactly one project.
+
+**Decisions**
+- Supabase no longer lists tables to public keys, so names come from the site's scripts. Tables the scripts don't name aren't checked, and `Array.from` and `storage.from` calls are ignored.
+- Supabase probes need the key from the site's code, so they run in full scans. "Check backends" still covers Firebase only.
+
 ## 2026-11-10: Phase 3, step 3b: Check backends
 
 **Added**

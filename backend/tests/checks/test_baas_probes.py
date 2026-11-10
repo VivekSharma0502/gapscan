@@ -148,10 +148,11 @@ def test_storage_probe_cannot_redirect_off_its_host(fake_get: FakeGet) -> None:
     assert fake_get.kwargs[0]["max_bytes"] == STORAGE_MAX_BYTES
 
 
-def test_the_module_can_only_make_get_requests() -> None:
+def test_the_module_can_only_read() -> None:
     source = inspect.getsource(baas_probes)
 
-    assert "safe_api_request" not in source
+    for method in ('"POST"', '"PUT"', '"PATCH"', '"DELETE"'):
+        assert method not in source
     assert "httpx" not in source
 
 

@@ -9,9 +9,12 @@ import { Button } from "@/components/ui/button";
 import {
   confirmBackend,
   listBackends,
+  setTablePublic,
   startBackendCheck,
   type BaasKind,
+  type BackendTable,
   type DomainBackend,
+  type TableAccess,
 } from "@/lib/api";
 
 const KIND_LABELS: Record<BaasKind, string> = {
@@ -20,8 +23,60 @@ const KIND_LABELS: Record<BaasKind, string> = {
   supabase: "Supabase project",
 };
 
+const ACCESS_LABELS: Record<TableAccess, string> = {
+  readable: "Returned rows to the public",
+  no_rows: "No rows returned",
+  refused: "Refused",
+};
+
 function backendsKey(domainId: string) {
   return ["domain-backends", domainId];
+}
+
+function TableRow({
+  domainId,
+  backendId,
+  table,
+}: {
+  domainId: string;
+  backendId: string;
+  table: BackendTable;
+}) {
+  const queryClient = useQueryClient();
+  const choose = useMutation({
+    mutationFn: (meantToBePublic: boolean) =>
+      setTablePublic(domainId, backendId, table.id, meantToBePublic),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: backendsKey(domainId) }),
+  });
+
+  return (
+    <li className="flex flex-col gap-1 py-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        {/* Security: this name comes from the scanned site, so it is only rendered as text. */}
+        <span className="font-mono text-xs wrap-anywhere">{table.name}</span>
+        <span className="text-xs text-muted-foreground">
+          {ACCESS_LABELS[table.access]}
+        </span>
+      </div>
+      {(table.access === "readable" || table.meant_to_be_public) && (
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={table.meant_to_be_public}
+            disabled={choose.isPending}
+            onChange={(event) => choose.mutate(event.target.checked)}
+          />
+          This table is meant to be public
+        </label>
+      )}
+      {choose.error && (
+        <p role="alert" className="text-xs text-destructive">
+          {choose.error.message}
+        </p>
+      )}
+    </li>
+  );
 }
 
 function BackendRow({
@@ -75,6 +130,23 @@ function BackendRow({
         <p role="alert" className="text-sm text-destructive">
           {confirm.error.message}
         </p>
+      )}
+      {backend.tables.length > 0 && (
+        <div className="flex flex-col gap-1 pl-3">
+          <ul className="divide-y">
+            {backend.tables.map((table) => (
+              <TableRow
+                key={table.id}
+                domainId={domainId}
+                backendId={backend.id}
+                table={table}
+              />
+            ))}
+          </ul>
+          <p className="text-xs text-muted-foreground">
+            Changes here apply from your next full scan.
+          </p>
+        </div>
       )}
     </li>
   );

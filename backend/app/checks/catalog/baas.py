@@ -24,7 +24,62 @@ service firebase.storage {
   }
 }"""
 
+_RLS_DOCS = "https://supabase.com/docs/guides/database/postgres/row-level-security"
+
+_RLS_SNIPPET = """-- Turn on Row Level Security. With no policy yet, this blocks all public access.
+alter table public.your_table enable row level security;
+
+-- Let each signed-in user read only their own rows.
+create policy "Users can read their own rows"
+on public.your_table for select
+to authenticated
+using ( (select auth.uid()) = user_id );"""
+
 TEXT: dict[str, CheckText] = {
+    "baas.supabase_table_readable": CheckText(
+        title="Supabase tables return rows to anyone",
+        fix=Fix(
+            what_it_means=(
+                "Your public key is in your website's code, so anyone can use it. With it, these "
+                "tables returned rows without signing in, which means Row Level Security is off "
+                "or a policy allows public reads. GapScan checked this without downloading any "
+                "rows."
+            ),
+            how_to_fix=(
+                "If a table holds private data, turn on Row Level Security and add a policy like "
+                "this one, changing the table and column names to match yours. If a table is "
+                "meant to be public, such as a product list, mark it on the My domains page and "
+                "it will stop affecting your grade."
+            ),
+            backend=BackendFix(label="Supabase", snippet=_RLS_SNIPPET, docs_url=_RLS_DOCS),
+        ),
+    ),
+    "baas.supabase_tables_public": CheckText(
+        title="Tables you marked as meant to be public",
+        fix=Fix(
+            what_it_means=(
+                "These tables return rows to anyone, and you've said that's intended, so they "
+                "don't affect your grade."
+            ),
+            how_to_fix=(
+                "Nothing to do. If one of these starts holding private data, unmark it on the "
+                "My domains page and turn on Row Level Security."
+            ),
+            backend=BackendFix(label="Supabase", docs_url=_RLS_DOCS),
+        ),
+    ),
+    "baas.supabase_tables_checked": CheckText(
+        title="Checked: tables returned no rows to the public",
+        fix=Fix(
+            what_it_means=(
+                "GapScan tried these tables with your public key and got no rows back. An empty "
+                "table looks the same as a protected one, so this could still change once rows "
+                "are added. Only tables named in your site's scripts were checked."
+            ),
+            how_to_fix="Nothing to do. Make sure Row Level Security is on for each of these.",
+            backend=BackendFix(label="Supabase", docs_url=_RLS_DOCS),
+        ),
+    ),
     "baas.firebase_rtdb_public": CheckText(
         title="Firebase database is readable by anyone",
         fix=Fix(

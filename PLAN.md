@@ -94,8 +94,9 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - [x] "These are mine" confirmation on the My domains page
 - [x] Firebase RTDB root readable → critical (stores yes/no + key count). Storage listing → high
 - [x] "Check backends" runs only the probes for confirmed backends, so a blocked website can't stop them. A refused probe is reported as an explicit "Checked" line
-- [ ] Supabase tables named by `.from()` in scripts, checked with HEAD. Readable → high, with a per-table "meant to be public" option that makes it info and stops it affecting the grade
-- [ ] Plain-language fixes with rule snippets
+- [x] Supabase tables named by `.from()` in scripts, checked with HEAD. Readable → high, with a per-table "meant to be public" option that makes it info and stops it affecting the grade
+- [x] Plain-language fixes with rule snippets
+- Supabase probes need the public key from the site's own code, so they run in full scans only and "Check backends" covers Firebase
 - Nothing is sent to a backend until the domain's owner confirms it's theirs, because a verified site's code can name someone else's project
 - Firestore isn't covered, because probing it needs collection names
 
@@ -122,6 +123,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - **github_install_states**: id, owner_id, token_hash, expires_at, created_at (one-time, ties an install redirect to the user who started it)
 - **github_installations**: id, owner_id, installation_id, account_id, account_login, suspended_at, created_at
 - **domain_backends**: id, domain_id, kind (firebase_rtdb|firebase_storage|supabase), identifier, first_seen_at, last_seen_at, confirmed_at (null = never probed)
+- **domain_backend_tables**: id, backend_id, name, access (readable|no_rows|refused), last_seen_at, meant_to_be_public_at (names and states only, never rows)
 - **repos**: id, owner_id, installation_id, github_repo_id, full_name, is_private, first_full_scan_at, needs_full_scan, created_at
 - **github_deliveries**: delivery_id, received_at (webhook replay protection)
 - **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, before_sha, after_sha, target, mode (quick|full|backends), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, grade_cap_reason, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
@@ -152,6 +154,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 | GET | /api/dashboard | auth. Per-domain standing and trend, plus recent scans |
 | GET | /api/domains/{id}/backends | auth, owner only. Backends named in the site's code |
 | POST | /api/domains/{id}/backends/{backend_id}/confirm | auth, 30/min per IP. The owner says a backend is theirs, or takes that back. Verified domains only |
+| POST | /api/domains/{id}/backends/{backend_id}/tables/{table_id}/public | auth, 30/min per IP. The owner marks a table as meant to be public, or takes that back |
 | GET | /api/domains/{id}/scans | auth, owner only. Full scans, paginated (`limit`, `offset`, `scored_only`) |
 | GET | /api/scans/{id}/report.pdf | auth |
 | PUT | /api/settings/notifications | auth |

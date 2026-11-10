@@ -83,6 +83,9 @@ EXPECTED_CHECKS = {
     "baas.firebase_storage_listable",
     "baas.firebase_rtdb_protected",
     "baas.firebase_storage_protected",
+    "baas.supabase_table_readable",
+    "baas.supabase_tables_public",
+    "baas.supabase_tables_checked",
 }
 
 

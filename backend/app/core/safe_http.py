@@ -578,7 +578,7 @@ def safe_head(url: str) -> SafeResponse:
 
 
 def safe_api_request(
-    method: Literal["GET", "POST", "DELETE"],
+    method: Literal["GET", "HEAD", "POST", "DELETE"],
     url: str,
     *,
     headers: Mapping[str, str],

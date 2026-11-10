@@ -1,6 +1,7 @@
 """Domains a user owns: adding, verifying and running full scans."""
 
 import secrets
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import UUID
@@ -19,7 +20,7 @@ from app.api.scans import (
     scan_summary,
 )
 from app.checks.baas_probes import PROBED_KINDS
-from app.checks.base import BaasKind
+from app.checks.base import BaasKind, TableAccess
 from app.checks.domains import registrable_domain, shared_platform_suffix
 from app.checks.ownership import (
     FailureCode,
@@ -32,7 +33,7 @@ from app.checks.ownership import (
 from app.core.auth import ensure_profile
 from app.core.rate_limit import limiter
 from app.core.safe_http import BlockedTargetError, normalize_scan_target
-from app.models.domain import Domain, DomainBackend
+from app.models.domain import Domain, DomainBackend, DomainBackendTable
 from app.models.profile import Profile
 from app.models.scan import (
     SCAN_STALE_AFTER,
@@ -131,6 +132,15 @@ class ScanPage(BaseModel):
     offset: int
 
 
+class BackendTableOut(BaseModel):
+    # Security: a name and a state. Rows are never fetched, so none can be returned.
+    id: UUID
+    name: str
+    access: TableAccess
+    meant_to_be_public: bool
+    last_seen_at: datetime
+
+
 class BackendOut(BaseModel):
     id: UUID
     kind: BaasKind
@@ -139,6 +149,13 @@ class BackendOut(BaseModel):
     confirmed: bool
     first_seen_at: datetime
     last_seen_at: datetime
+    tables: list[BackendTableOut]
+
+
+class TablePublicChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    meant_to_be_public: bool
 
 
 class BackendConfirm(BaseModel):
@@ -147,8 +164,33 @@ class BackendConfirm(BaseModel):
     confirmed: bool
 
 
-def _backend_out(backend: DomainBackend) -> BackendOut:
+def _table_out(table: DomainBackendTable) -> BackendTableOut:
+    return BackendTableOut(
+        id=table.id,
+        name=table.name,
+        access=table.access,
+        meant_to_be_public=table.meant_to_be_public_at is not None,
+        last_seen_at=table.last_seen_at,
+    )
+
+
+def _tables_by_backend(
+    session: Session, backend_ids: list[UUID]
+) -> dict[UUID, list[BackendTableOut]]:
+    grouped: dict[UUID, list[BackendTableOut]] = defaultdict(list)
+    rows = session.exec(
+        select(DomainBackendTable)
+        .where(DomainBackendTable.backend_id.in_(backend_ids))
+        .order_by(DomainBackendTable.name)
+    )
+    for row in rows:
+        grouped[row.backend_id].append(_table_out(row))
+    return grouped
+
+
+def _backend_out(backend: DomainBackend, tables: list[BackendTableOut]) -> BackendOut:
     return BackendOut(
+        tables=tables,
         id=backend.id,
         kind=backend.kind,
         identifier=backend.identifier,
@@ -271,8 +313,9 @@ def list_backends(domain_id: UUID, session: SessionDep, viewer: SignedInDep) -> 
         select(DomainBackend)
         .where(DomainBackend.domain_id == domain_id)
         .order_by(DomainBackend.kind, DomainBackend.identifier)
-    )
-    return [_backend_out(row) for row in rows]
+    ).all()
+    tables = _tables_by_backend(session, [row.id for row in rows])
+    return [_backend_out(row, tables[row.id]) for row in rows]
 
 
 @router.post("/{domain_id}/backends/{backend_id}/confirm", response_model=BackendOut)
@@ -298,7 +341,43 @@ def confirm_backend(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Backend not found.")
     backend.confirmed_at = utc_now() if body.confirmed else None
     session.commit()
-    return _backend_out(backend)
+    return _backend_out(backend, _tables_by_backend(session, [backend.id])[backend.id])
+
+
+@router.post(
+    "/{domain_id}/backends/{backend_id}/tables/{table_id}/public",
+    response_model=BackendTableOut,
+)
+@limiter.limit(CONFIRM_BACKEND_RATE_LIMIT)
+def set_table_public(
+    request: Request,
+    response: Response,
+    domain_id: UUID,
+    backend_id: UUID,
+    table_id: UUID,
+    body: TablePublicChoice,
+    session: SessionDep,
+    viewer: SignedInDep,
+) -> BackendTableOut:
+    domain = _owned_domain(session, domain_id, viewer.id)
+    # Security: this lowers a finding's severity, so only a proven owner can do it. Taking
+    # it back is always allowed.
+    if body.meant_to_be_public and domain.verified_at is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="Verify this domain before marking its tables."
+        )
+    backend = session.get(DomainBackend, backend_id)
+    table = session.get(DomainBackendTable, table_id)
+    if (
+        backend is None
+        or table is None
+        or backend.domain_id != domain.id
+        or table.backend_id != backend.id
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Table not found.")
+    table.meant_to_be_public_at = utc_now() if body.meant_to_be_public else None
+    session.commit()
+    return _table_out(table)
 
 
 @router.get("/{domain_id}/scans", response_model=ScanPage)

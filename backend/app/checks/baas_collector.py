@@ -14,14 +14,22 @@ from app.checks.active_collector import (
     polite_pause,
     same_origin_script_paths,
 )
-from app.checks.baas_discovery import find_backends, find_exposed_keys
+from app.checks.baas_discovery import (
+    find_anon_keys,
+    find_backends,
+    find_exposed_keys,
+    find_publishable_keys,
+    find_table_names,
+)
 from app.checks.base import (
     BaasDiscovery,
+    BaasKind,
     DiscoveredBackend,
     ExposedServiceKey,
     Input,
     ScanContext,
     SkippedScript,
+    SupabaseAccess,
     bot_protection,
     bot_protection_label,
     shows_real_page,
@@ -36,6 +44,7 @@ MAX_BUNDLE_TOTAL_BYTES = 6 * 1024 * 1024
 DISCOVERY_BUDGET_SECONDS = 30.0
 # Security: a page can name as many backends as it likes, so only this many are remembered.
 MAX_BACKENDS = 10
+MAX_TABLES = 25
 
 _HOMEPAGE_LOCATION = "your homepage"
 
@@ -88,6 +97,22 @@ def _limit_reached(index: int, deadline: float, total_bytes: int, blocked: bool)
     return None
 
 
+def _supabase_access(
+    backends: set[DiscoveredBackend], anon: dict[str, str], publishable: set[str]
+) -> tuple[SupabaseAccess, ...]:
+    refs = sorted(item.identifier for item in backends if item.kind is BaasKind.SUPABASE)
+    # An anon key names its own project. A publishable key doesn't, so it's only used when
+    # there is exactly one project it could belong to.
+    only_key = next(iter(publishable)) if len(refs) == 1 and len(publishable) == 1 else None
+    access: list[SupabaseAccess] = []
+    for ref in refs:
+        if ref in anon:
+            access.append(SupabaseAccess(ref, anon[ref], is_jwt=True))
+        elif only_key is not None:
+            access.append(SupabaseAccess(ref, only_key, is_jwt=False))
+    return tuple(access)
+
+
 def discover_backends(ctx: ScanContext) -> ScanContext:
     """Return the context with what its code reveals, including inline scripts.
 
@@ -122,6 +147,9 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
     exposed: dict[ExposedServiceKey, None] = dict.fromkeys(
         find_exposed_keys(homepage, _HOMEPAGE_LOCATION)
     )
+    anon = find_anon_keys(homepage)
+    publishable = find_publishable_keys(homepage)
+    tables = find_table_names(homepage)
     skipped: list[SkippedScript] = []
     read, failed, total_bytes = 0, 0, 0
     blocked_by = ctx.blocked_by
@@ -169,6 +197,9 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
         text = _text(response.content)
         backends |= find_backends(text)
         exposed.update(dict.fromkeys(find_exposed_keys(text, path)))
+        anon.update(find_anon_keys(text))
+        publishable |= find_publishable_keys(text)
+        tables |= find_table_names(text)
 
     ordered = sorted(backends, key=lambda item: (item.kind.value, item.identifier))
     return replace(
@@ -180,6 +211,8 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
             scripts_read=read,
             scripts_failed=failed,
             skipped=tuple(skipped),
+            supabase_access=_supabase_access(set(ordered[:MAX_BACKENDS]), anon, publishable),
+            table_names=tuple(sorted(tables)[:MAX_TABLES]),
         ),
         blocked_by=blocked_by,
     )

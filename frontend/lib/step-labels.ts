@@ -51,6 +51,9 @@ const STEP_LABELS: Record<string, string> = {
   "baas.firebase_storage_listable": "Firebase storage rules",
   "baas.firebase_rtdb_protected": "Firebase database access",
   "baas.firebase_storage_protected": "Firebase storage access",
+  "baas.supabase_table_readable": "Supabase table access",
+  "baas.supabase_tables_public": "Tables marked as public",
+  "baas.supabase_tables_checked": "Supabase tables checked",
 
   "exposure.env_file": "Environment files",
   "exposure.git_directory": "Git folder",

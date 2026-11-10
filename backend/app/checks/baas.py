@@ -16,10 +16,13 @@ from app.checks.base import (
     ScanContext,
     Severity,
     SkipCheck,
+    TableAccess,
+    TableProbe,
 )
 from app.checks.registry import check, make_finding
 
 MAX_LOCATIONS = 5
+MAX_TABLES_LISTED = 10
 
 _NO_RELIABLE_ANSWER = "This backend gave no reliable answer, so this could not be confirmed."
 
@@ -150,4 +153,72 @@ def firebase_storage_protected(ctx: ScanContext) -> Finding | None:
         "baas.firebase_storage_protected",
         Severity.INFO,
         f"Refused a file listing without signing in: {'; '.join(buckets)}.",
+    )
+
+
+def _tables(ctx: ScanContext) -> list[TableProbe]:
+    return [table for project in _probes(ctx).supabase for table in project.tables]
+
+
+def _names(tables: list[TableProbe]) -> str:
+    shown = ", ".join(table.name for table in tables[:MAX_TABLES_LISTED])
+    hidden = len(tables) - MAX_TABLES_LISTED
+    return f"{shown} and {hidden} more" if hidden > 0 else shown
+
+
+@check("baas.supabase_table_readable", Category.BAAS, requires=[Input.BAAS_PROBES], active=True)
+def supabase_table_readable(ctx: ScanContext) -> Finding | None:
+    tables = _tables(ctx)
+    readable = [
+        table
+        for table in tables
+        if table.access is TableAccess.READABLE and not table.meant_to_be_public
+    ]
+    if readable:
+        return make_finding(
+            "baas.supabase_table_readable",
+            Severity.HIGH,
+            f"Returned rows to anyone using your public key: {_names(readable)}.",
+        )
+    projects = _probes(ctx).supabase
+    if any(not project.has_key for project in projects):
+        raise SkipCheck("Your site's code didn't include a public key to test with.")
+    if projects and not tables:
+        raise SkipCheck('No .from("table") calls were found in the scripts we could read.')
+    if any(table.access is TableAccess.UNKNOWN for table in tables):
+        raise SkipCheck(_NO_RELIABLE_ANSWER)
+    return None
+
+
+@check("baas.supabase_tables_public", Category.BAAS, requires=[Input.BAAS_PROBES], active=True)
+def supabase_tables_public(ctx: ScanContext) -> Finding | None:
+    """Keep acknowledged tables visible without letting them affect the grade."""
+    tables = [
+        table
+        for table in _tables(ctx)
+        if table.access is TableAccess.READABLE and table.meant_to_be_public
+    ]
+    if not tables:
+        return None
+    return make_finding(
+        "baas.supabase_tables_public",
+        Severity.INFO,
+        f"Readable, and marked by you as meant to be public: {_names(tables)}.",
+    )
+
+
+@check("baas.supabase_tables_checked", Category.BAAS, requires=[Input.BAAS_PROBES], active=True)
+def supabase_tables_checked(ctx: ScanContext) -> Finding | None:
+    """Say so when tables were checked and gave nothing, so a clean result isn't just silence."""
+    tables = [
+        table
+        for table in _tables(ctx)
+        if table.access in (TableAccess.NO_ROWS, TableAccess.REFUSED)
+    ]
+    if not tables:
+        return None
+    return make_finding(
+        "baas.supabase_tables_checked",
+        Severity.INFO,
+        f"Returned no rows to your public key: {_names(tables)}.",
     )

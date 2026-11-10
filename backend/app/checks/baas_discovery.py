@@ -6,6 +6,7 @@ counts, and later steps can only ever contact what passes here.
 """
 
 import re
+from typing import Any
 from urllib.parse import urlsplit
 
 import jwt
@@ -34,6 +35,13 @@ _OPTIONAL_Q = r"""\\?["'`]?"""
 _API_KEY_RE = re.compile(rf"apiKey{_OPTIONAL_Q}\s*:\s*{_Q}AIza[0-9A-Za-z_-]{{35}}")
 _JWT_RE = re.compile(rf"\beyJ{_JWT_PART}\.eyJ{_JWT_PART}\.{_JWT_PART}")
 _SECRET_KEY_RE = re.compile(r"\bsb_secret_[A-Za-z0-9_-]{20,}")
+_PUBLISHABLE_KEY_RE = re.compile(r"\bsb_publishable_[A-Za-z0-9_-]{20,}")
+_SUPABASE_REF_RE = re.compile(r"[a-z0-9]{20}")
+_TABLE_NAME = r"[A-Za-z_][A-Za-z0-9_]{0,62}"
+_TABLE_NAME_RE = re.compile(_TABLE_NAME)
+_FROM_CALL_RE = re.compile(rf"([A-Za-z0-9_$]*)\.from\(\s*{_Q}({_TABLE_NAME}){_Q}\s*\)")
+# Array.from("x") and storage.from("bucket") look the same as a table query.
+_NOT_TABLE_CLIENTS = frozenset({"Buffer", "Object", "Set", "Map", "storage"})
 
 
 def _config_field(window: str, name: str) -> str | None:
@@ -96,14 +104,50 @@ def find_backends(text: str) -> set[DiscoveredBackend]:
     return _firebase_backends(text) | supabase
 
 
-def _is_supabase_service_role(token: str) -> bool:
+def _supabase_claims(token: str) -> dict[str, Any]:
     try:
         # Security: the signature isn't checked because nothing here trusts this token. Only
-        # its stated role is read, to decide whether a server-only key was published.
+        # its stated role and project are read, to tell which kind of key was published.
         claims = jwt.decode(token, options={"verify_signature": False})
     except jwt.PyJWTError:
-        return False
-    return claims.get("iss") == "supabase" and claims.get("role") == "service_role"
+        return {}
+    return claims if claims.get("iss") == "supabase" else {}
+
+
+def _is_supabase_service_role(token: str) -> bool:
+    return _supabase_claims(token).get("role") == "service_role"
+
+
+def is_official_supabase_ref(ref: str) -> bool:
+    return _SUPABASE_REF_RE.fullmatch(ref) is not None
+
+
+def is_valid_table_name(name: str) -> bool:
+    return _TABLE_NAME_RE.fullmatch(name) is not None
+
+
+def find_anon_keys(text: str) -> dict[str, str]:
+    """Return public anon keys by project. Security: any other role is never returned."""
+    keys: dict[str, str] = {}
+    for match in _JWT_RE.finditer(text):
+        claims = _supabase_claims(match.group(0))
+        ref = claims.get("ref")
+        if claims.get("role") == "anon" and isinstance(ref, str):
+            keys[ref] = match.group(0)
+    return keys
+
+
+def find_publishable_keys(text: str) -> set[str]:
+    return set(_PUBLISHABLE_KEY_RE.findall(text))
+
+
+def find_table_names(text: str) -> set[str]:
+    """Return the names passed to supabase-js .from() calls."""
+    return {
+        match.group(2)
+        for match in _FROM_CALL_RE.finditer(text)
+        if match.group(1) not in _NOT_TABLE_CLIENTS and not match.group(1).endswith("Array")
+    }
 
 
 def find_exposed_keys(text: str, location: str) -> list[ExposedServiceKey]:

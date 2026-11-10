@@ -112,6 +112,16 @@ export interface Domain {
 
 export type BaasKind = "firebase_rtdb" | "firebase_storage" | "supabase";
 
+export type TableAccess = "readable" | "no_rows" | "refused";
+
+export interface BackendTable {
+  id: string;
+  name: string;
+  access: TableAccess;
+  meant_to_be_public: boolean;
+  last_seen_at: string;
+}
+
 export interface DomainBackend {
   id: string;
   kind: BaasKind;
@@ -120,6 +130,7 @@ export interface DomainBackend {
   confirmed: boolean;
   first_seen_at: string;
   last_seen_at: string;
+  tables: BackendTable[];
 }
 
 export interface VerifyFailure {
@@ -382,6 +393,22 @@ export function confirmBackend(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirmed }),
+    },
+  );
+}
+
+export function setTablePublic(
+  domainId: string,
+  backendId: string,
+  tableId: string,
+  meantToBePublic: boolean,
+): Promise<BackendTable> {
+  return request(
+    `/api/domains/${encodeURIComponent(domainId)}/backends/${encodeURIComponent(backendId)}/tables/${encodeURIComponent(tableId)}/public`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ meant_to_be_public: meantToBePublic }),
     },
   );
 }

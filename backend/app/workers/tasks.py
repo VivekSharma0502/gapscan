@@ -12,14 +12,21 @@ from sqlmodel import select, update
 
 from app.checks.active_collector import attach_probes, without_probes
 from app.checks.baas_collector import discover_backends
-from app.checks.baas_probes import probe_backends, probe_confirmed_backends
+from app.checks.baas_probes import (
+    mark_public_tables,
+    probe_backends,
+    probe_confirmed_backends,
+)
 from app.checks.base import (
     BaasDiscovery,
+    BaasKind,
+    BaasProbes,
     BotProtection,
     Category,
     DiscoveredBackend,
     Input,
     ScanContext,
+    TableAccess,
     bot_protection_label,
 )
 from app.checks.collector import COLLECT_STEPS, collect_context
@@ -32,7 +39,7 @@ from app.checks.runner import (
     selected_checks,
 )
 from app.core.db import new_session
-from app.models.domain import Domain, DomainBackend
+from app.models.domain import Domain, DomainBackend, DomainBackendTable
 from app.models.github import GithubInstallation, Repo
 from app.models.scan import FindingRecord, Scan, ScanJobStatus, utc_now
 from app.repos.scanner import REPO_STEPS, RepoScanLimitError, RepoScanResult, scan_repository
@@ -422,6 +429,65 @@ def _confirmed_backends(scan_id: UUID) -> set[DiscoveredBackend]:
         return {DiscoveredBackend(row.kind, row.identifier) for row in rows}
 
 
+def _public_tables(scan_id: UUID) -> set[tuple[str, str]]:
+    with new_session() as session:
+        domain_id = session.get_one(Scan, scan_id).domain_id
+        if domain_id is None:
+            return set()
+        rows = session.exec(
+            select(DomainBackend.identifier, DomainBackendTable.name)
+            .join(DomainBackendTable, DomainBackendTable.backend_id == DomainBackend.id)
+            .where(
+                DomainBackend.domain_id == domain_id,
+                DomainBackendTable.meant_to_be_public_at.is_not(None),
+            )
+        )
+        return {(ref, name) for ref, name in rows}
+
+
+def _remember_tables(scan_id: UUID, probes: BaasProbes | None) -> None:
+    """Record each table's state, so its owner can mark the public ones. Names only."""
+    if probes is None or not probes.supabase:
+        return
+    with new_session() as session:
+        domain_id = session.get_one(Scan, scan_id).domain_id
+        if domain_id is None:
+            return
+        now = utc_now()
+        for project in probes.supabase:
+            backend = session.exec(
+                select(DomainBackend).where(
+                    DomainBackend.domain_id == domain_id,
+                    DomainBackend.kind == BaasKind.SUPABASE,
+                    DomainBackend.identifier == project.ref,
+                )
+            ).first()
+            if backend is None:
+                continue
+            known = {
+                row.name: row
+                for row in session.exec(
+                    select(DomainBackendTable).where(DomainBackendTable.backend_id == backend.id)
+                )
+            }
+            for table in project.tables:
+                # A name that isn't a table, or a table that gave no answer, tells us nothing.
+                if table.access in (TableAccess.NOT_FOUND, TableAccess.UNKNOWN):
+                    continue
+                row = known.get(table.name)
+                if row is None:
+                    session.add(
+                        DomainBackendTable(
+                            backend_id=backend.id, name=table.name, access=table.access
+                        )
+                    )
+                else:
+                    # An existing row keeps its "meant to be public" choice.
+                    row.access = table.access
+                    row.last_seen_at = now
+        session.commit()
+
+
 def initial_backend_progress() -> dict[str, Any]:
     return _progress(0, 2 + len(BACKEND_CHECK_IDS), None)
 
@@ -547,6 +613,8 @@ def run_full_scan(scan_id: str) -> None:
         on_step(BAAS_PROBE_STEP)
         if not problem:
             context = probe_backends(context, _confirmed_backends(job_id))
+            context = mark_public_tables(context, _public_tables(job_id))
+            _remember_tables(job_id, context.baas_probes)
         # After a problem there are no probes, so the active checks report skipped, not passed.
         report = run_checks(context, on_step=on_step, allow_active=True)
         _save_report(job_id, report, total, finished)

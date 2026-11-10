@@ -1,7 +1,7 @@
-"""Read-only checks on the Firebase backends a verified site's owner has confirmed.
+"""Read-only checks on the Firebase and Supabase backends a site's owner has confirmed.
 
 Security rules for this module:
-- Only GET requests through the SSRF guard, so nothing here can write to a backend.
+- Only GET and HEAD requests through the SSRF guard, so nothing here can write to a backend.
 - A backend is contacted only if the owner confirmed it and this scan found it in the site.
 - Each name is checked again here, because it was read back from the database.
 - Responses are reduced to a yes/no and a count on the spot, so data never leaves this module.
@@ -14,16 +14,26 @@ from time import monotonic
 from urllib.parse import quote
 
 from app.checks.active_collector import gave_no_real_answer, polite_pause
-from app.checks.baas_discovery import is_official_rtdb_host, is_valid_bucket
+from app.checks.baas_discovery import (
+    is_official_rtdb_host,
+    is_official_supabase_ref,
+    is_valid_bucket,
+    is_valid_table_name,
+)
 from app.checks.base import (
+    BaasDiscovery,
     BaasKind,
     BaasProbes,
     DiscoveredBackend,
     RtdbProbe,
     ScanContext,
     StorageProbe,
+    SupabaseAccess,
+    SupabaseProbe,
+    TableAccess,
+    TableProbe,
 )
-from app.core.safe_http import SafeHttpError, SafeResponse, safe_get
+from app.core.safe_http import SafeHttpError, SafeResponse, safe_api_request, safe_get
 
 STORAGE_HOST = "firebasestorage.googleapis.com"
 # Top-level keys only, each with the value true, so this holds thousands of them.
@@ -48,6 +58,55 @@ def _get(url: str, host: str, max_bytes: int) -> SafeResponse | None:
         return safe_get(url, allowed_hosts=frozenset({host}), max_bytes=max_bytes)
     except SafeHttpError:
         return None
+
+
+def _head_table(access: SupabaseAccess, name: str) -> tuple[TableAccess, bool]:
+    """Return what one table allows, and whether Supabase asked us to stop."""
+    polite_pause()
+    headers = {"apikey": access.key}
+    # A publishable key isn't a JWT, and Supabase rejects one sent as a bearer token.
+    if access.is_jwt:
+        headers["Authorization"] = f"Bearer {access.key}"
+    try:
+        # Security: HEAD returns headers only, so no row ever leaves Supabase. This call also
+        # refuses redirects, because it carries a key.
+        response = safe_api_request(
+            "HEAD",
+            f"https://{access.ref}.supabase.co/rest/v1/{quote(name, safe='')}?select=*&limit=1",
+            headers=headers,
+        )
+    except SafeHttpError:
+        return TableAccess.UNKNOWN, False
+    if response.status_code == 429:
+        return TableAccess.UNKNOWN, True
+    if response.status_code == 404:
+        return TableAccess.NOT_FOUND, False
+    if response.status_code in (401, 403):
+        return TableAccess.REFUSED, False
+    if response.status_code not in (200, 206):
+        return TableAccess.UNKNOWN, False
+    # "0-0/*" means a row came back and "*/*" means none did.
+    content_range = response.headers.get("content-range", "")
+    if content_range[:1].isdigit():
+        return TableAccess.READABLE, False
+    return (TableAccess.NO_ROWS if content_range.startswith("*") else TableAccess.UNKNOWN), False
+
+
+def _probe_supabase(baas: BaasDiscovery, ref: str, deadline: float) -> SupabaseProbe:
+    access = next((item for item in baas.supabase_access if item.ref == ref), None)
+    if access is None:
+        return SupabaseProbe(ref, has_key=False)
+    tables: list[TableProbe] = []
+    stop = False
+    for name in baas.table_names:
+        if not is_valid_table_name(name):
+            continue
+        if stop or monotonic() >= deadline:
+            tables.append(TableProbe(name, TableAccess.UNKNOWN))
+            continue
+        result, stop = _head_table(access, name)
+        tables.append(TableProbe(name, result))
+    return SupabaseProbe(ref, tuple(tables))
 
 
 def _is_denied(response: SafeResponse) -> bool:
@@ -98,6 +157,7 @@ def _probe(ctx: ScanContext, backends: Iterable[DiscoveredBackend]) -> ScanConte
     deadline = monotonic() + PROBE_BUDGET_SECONDS
     rtdb: list[RtdbProbe] = []
     storage: list[StorageProbe] = []
+    supabase: list[SupabaseProbe] = []
     for backend in backends:
         out_of_time = monotonic() >= deadline
         if backend.kind is BaasKind.FIREBASE_RTDB and is_official_rtdb_host(backend.identifier):
@@ -112,7 +172,16 @@ def _probe(ctx: ScanContext, backends: Iterable[DiscoveredBackend]) -> ScanConte
                 if out_of_time
                 else _probe_storage(backend.identifier)
             )
-    return replace(ctx, baas_probes=BaasProbes(rtdb=tuple(rtdb), storage=tuple(storage)))
+        elif (
+            backend.kind is BaasKind.SUPABASE
+            and ctx.baas is not None
+            and is_official_supabase_ref(backend.identifier)
+        ):
+            supabase.append(_probe_supabase(ctx.baas, backend.identifier, deadline))
+    return replace(
+        ctx,
+        baas_probes=BaasProbes(rtdb=tuple(rtdb), storage=tuple(storage), supabase=tuple(supabase)),
+    )
 
 
 def probe_backends(ctx: ScanContext, confirmed: Collection[DiscoveredBackend]) -> ScanContext:
@@ -133,3 +202,20 @@ def probe_confirmed_backends(
     The owner asked for this check directly, so the site's bot protection doesn't apply.
     """
     return _probe(ctx, sorted(confirmed, key=lambda item: (item.kind.value, item.identifier)))
+
+
+def mark_public_tables(ctx: ScanContext, public: Collection[tuple[str, str]]) -> ScanContext:
+    """Flag the tables their owner has said are meant to be public, as (ref, name) pairs."""
+    if ctx.baas_probes is None:
+        return ctx
+    projects = tuple(
+        replace(
+            project,
+            tables=tuple(
+                replace(table, meant_to_be_public=(project.ref, table.name) in public)
+                for table in project.tables
+            ),
+        )
+        for project in ctx.baas_probes.supabase
+    )
+    return replace(ctx, baas_probes=replace(ctx.baas_probes, supabase=projects))

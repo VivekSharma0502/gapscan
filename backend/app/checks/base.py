@@ -195,6 +195,17 @@ class ExposedServiceKey:
 
 
 @dataclass(frozen=True)
+class SupabaseAccess:
+    """The public key a site's own browser code uses for one project."""
+
+    ref: str
+    # Security: held in memory for this scan only. repr=False keeps it out of logs.
+    key: str = field(repr=False)
+    # Legacy anon keys are JWTs and also go in Authorization. Publishable keys must not.
+    is_jwt: bool
+
+
+@dataclass(frozen=True)
 class SkippedScript:
     path: str
     reason: str
@@ -210,6 +221,9 @@ class BaasDiscovery:
     scripts_failed: int
     # Each script not fully read, and why, so a report can say what wasn't covered.
     skipped: tuple[SkippedScript, ...] = ()
+    # Only what browser code already holds. A server-only key is never placed here.
+    supabase_access: tuple[SupabaseAccess, ...] = ()
+    table_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -235,10 +249,38 @@ class StorageProbe:
     listable: bool | None
 
 
+class TableAccess(StrEnum):
+    READABLE = "readable"
+    # Allowed, but nothing came back. An empty table looks the same, so this proves little.
+    NO_ROWS = "no_rows"
+    REFUSED = "refused"
+    # Usually not a table at all, since names come from matching code.
+    NOT_FOUND = "not_found"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class TableProbe:
+    """What one table allows. Security: a name and a state, with nowhere to hold a row."""
+
+    name: str
+    access: TableAccess
+    meant_to_be_public: bool = False
+
+
+@dataclass(frozen=True)
+class SupabaseProbe:
+    ref: str
+    tables: tuple[TableProbe, ...] = ()
+    # False when the site's code had no public key for this project.
+    has_key: bool = True
+
+
 @dataclass(frozen=True)
 class BaasProbes:
     rtdb: tuple[RtdbProbe, ...] = ()
     storage: tuple[StorageProbe, ...] = ()
+    supabase: tuple[SupabaseProbe, ...] = ()
 
 
 class SkipCheck(Exception):
