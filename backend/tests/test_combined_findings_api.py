@@ -104,7 +104,7 @@ def test_a_confirmed_leak_says_so_and_how_to_fix_it(
     assert card["title"] == "Your site's backend admin key is leaked in me/project"
     assert card["severity"] == "critical"
     assert card["confidence"] == "confirmed"
-    assert card["note"] is None
+    assert "counted once per project" in card["note"]
     assert card["hostname"] == "example.com"
     assert card["repo_full_name"] == "me/project"
     assert card["identifier"] == REF

@@ -137,6 +137,8 @@ class ScanOut(BaseModel):
     bot_protection: BotProtectionHelp | None
     # Set when a backend check relied on an earlier verification instead of a fresh one.
     verification_note: str | None
+    # Set when a leaked repo key changed this score, or was left out so it counts once.
+    correlation_note: str | None
     findings: list[FindingOut]
     # Every finding, including those cut from a teaser. The count reveals no details.
     total_findings: int
@@ -455,6 +457,7 @@ def get_scan(scan_id: UUID, session: SessionDep, viewer: ViewerDep) -> ScanOut:
         incomplete_reason=scan.incomplete_reason,
         bot_protection=_bot_protection_help(scan),
         verification_note=scan.verification_note,
+        correlation_note=scan.correlation_note,
         findings=[_finding_out(record) for record in shown],
         total_findings=len(records),
         skipped=[SkippedCheck(**item) for item in scan.skipped_json] if full_report else [],

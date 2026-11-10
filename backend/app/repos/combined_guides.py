@@ -15,7 +15,11 @@ LIKELY_NOTE = (
 ROTATED_NOTE = (
     "You told GapScan this key was replaced. GapScan can't check that itself, so it's "
     "recorded as your answer. If a different leak of a key for this project appears, it will "
-    "be raised again."
+    "be raised again. It stops affecting your score from your next full scan."
+)
+SCORE_NOTE = (
+    "Your next full scan deducts 25 points and caps your grade at D. This is counted once per "
+    "project, and adds nothing if that scan already found this key on your site."
 )
 
 

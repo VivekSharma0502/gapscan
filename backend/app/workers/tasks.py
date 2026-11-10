@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import delete
-from sqlmodel import Session, select, update
+from sqlmodel import Session, col, select, update
 
 from app.checks.active_collector import attach_probes, without_probes
 from app.checks.baas_collector import discover_backends
@@ -38,8 +38,14 @@ from app.checks.runner import (
     run_checks,
     selected_checks,
 )
+from app.checks.scoring import CorrelatedLeak
 from app.core.db import new_session
-from app.models.correlation import RepoIdentifier
+from app.models.correlation import (
+    CorrelatedFinding,
+    CorrelationKind,
+    MatchConfidence,
+    RepoIdentifier,
+)
 from app.models.domain import Domain, DomainBackend, DomainBackendTable, DomainFirebaseProject
 from app.models.github import GithubInstallation, Repo
 from app.models.scan import FindingRecord, IdentifierBasis, Scan, ScanJobStatus, utc_now
@@ -147,6 +153,7 @@ def _save_report(scan_id: UUID, report: ScanReport, total: int, steps: Sequence[
                 incomplete_reason=report.incomplete_reason,
                 blocked_by=report.blocked_by,
                 verification_note=report.verification_note,
+                correlation_note=report.correlation_note,
                 skipped_json=[item.model_dump() for item in report.skipped],
                 progress_json=_progress(total, total, None, steps),
                 finished_at=utc_now(),
@@ -375,6 +382,32 @@ def _save_repo_report(
         repo.full_name = result.full_name
         _save_repo_identifiers(session, repo_id, result)
         session.commit()
+
+
+def _correlated_leaks(scan_id: UUID) -> set[CorrelatedLeak]:
+    """The confirmed admin-key leaks that count against this site.
+
+    Likely matches and keys marked as rotated stay out. They're shown, but never scored.
+    """
+    with new_session() as session:
+        scan = session.get_one(Scan, scan_id)
+        if scan.domain_id is None or scan.owner_id is None:
+            return set()
+        cards = session.exec(
+            select(CorrelatedFinding).where(
+                CorrelatedFinding.domain_id == scan.domain_id,
+                CorrelatedFinding.owner_id == scan.owner_id,
+                CorrelatedFinding.confidence == MatchConfidence.CONFIRMED,
+                col(CorrelatedFinding.rotated_at).is_(None),
+                col(CorrelatedFinding.kind).in_(
+                    [CorrelationKind.SUPABASE_ADMIN, CorrelationKind.FIREBASE_ADMIN]
+                ),
+            )
+        )
+        return {
+            CorrelatedLeak(card.identifier, card.kind is CorrelationKind.SUPABASE_ADMIN)
+            for card in cards
+        }
 
 
 def _refresh_correlations(scan_id: UUID) -> None:
@@ -697,7 +730,8 @@ def run_full_scan(scan_id: str) -> None:
             context = mark_public_tables(context, _public_tables(job_id))
             _remember_tables(job_id, context.baas_probes)
         # After a problem there are no probes, so the active checks report skipped, not passed.
-        report = run_checks(context, on_step=on_step, allow_active=True)
+        leaks = set() if problem else _correlated_leaks(job_id)
+        report = run_checks(context, on_step=on_step, allow_active=True, correlated_leaks=leaks)
         _save_report(job_id, report, total, finished)
         _refresh_correlations(job_id)
     except Exception as exc:

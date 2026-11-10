@@ -173,6 +173,11 @@ function ScoreSummary({ scan }: { scan: Scan }) {
           {target}
         </h1>
         {scan.score_label && <Badge variant="outline">{scan.score_label}</Badge>}
+        {scan.correlation_note && (
+          <p className="text-sm text-pretty text-muted-foreground">
+            {scan.correlation_note}
+          </p>
+        )}
         {scan.incomplete_reason && (
           <p className="text-sm text-pretty">{scan.incomplete_reason}</p>
         )}

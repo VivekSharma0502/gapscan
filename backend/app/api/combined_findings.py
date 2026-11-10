@@ -33,6 +33,7 @@ from app.repos.combined_guides import (
     HISTORY_DOCS_URL,
     LIKELY_NOTE,
     ROTATED_NOTE,
+    SCORE_NOTE,
     HistoryStep,
     can_be_rotated,
     combined_title,
@@ -110,12 +111,19 @@ def _originals_by_card(session: Session, card_ids: list[UUID]) -> dict[UUID, lis
     return found
 
 
+def _note(card: CorrelatedFinding) -> str | None:
+    if card.rotated_at is not None:
+        return ROTATED_NOTE
+    if card.confidence is MatchConfidence.LIKELY:
+        return LIKELY_NOTE
+    return SCORE_NOTE if can_be_rotated(card.kind) else None
+
+
 def _card_out(
     session: Session, card: CorrelatedFinding, originals: list[FindingRecord]
 ) -> CombinedFindingOut:
     guide = guide_for(card.kind)
     repo = session.get_one(Repo, card.repo_id).full_name
-    likely = card.confidence is MatchConfidence.LIKELY
     has_history = bool(guide.history_steps)
     return CombinedFindingOut(
         id=card.id,
@@ -128,7 +136,7 @@ def _card_out(
         repo_id=card.repo_id,
         repo_full_name=repo,
         title=combined_title(card.kind, card.confidence, repo),
-        note=ROTATED_NOTE if card.rotated_at else LIKELY_NOTE if likely else None,
+        note=_note(card),
         what_it_means=guide.what_it_means,
         provider_name=guide.provider_name,
         rotate_steps=guide.rotate_steps,

@@ -124,6 +124,8 @@ class Scan(SQLModel, table=True):
     )
     # Set when a backend check relied on an earlier verification instead of a fresh one.
     verification_note: str | None = None
+    # Kept with the scan, so a saved report always explains the score it was given.
+    correlation_note: str | None = None
     skipped_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now, sa_column=_timestamp_column())
     started_at: datetime | None = Field(default=None, sa_column=_timestamp_column(nullable=True))

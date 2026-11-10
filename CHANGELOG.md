@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3c-7: leaked repo keys in the site score
+
+**Added**
+- A confirmed leak of a Supabase admin key or Firebase service account, for a backend a site uses, now costs 25 points and caps the grade at D from the next full scan. The report explains what was counted. Run `alembic upgrade head` and restart the API and worker.
+
+**Security**
+- A leaked key is never counted twice. It counts once per project however many commits, keys or repositories are involved, and adds nothing if the same scan already found that key on the site, or found a site key it can't tie to a project.
+- Combined findings aren't in the findings table, so the scorer can't sum them. They reach the score only through one explicit list.
+
+**Decisions**
+- Likely matches, keys marked as rotated, and Firebase config matches never affect the score. Quick scans are never affected.
+- Saved scans are never rewritten. A new leak changes the score from the next full scan, and the card appears straight away.
+
 ## 2026-11-10: Phase 3, step 3c: reopening a key marked as rotated
 
 **Added**

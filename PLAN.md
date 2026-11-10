@@ -107,7 +107,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - [x] Correlation logic and link suggestions
 - [x] Repo-to-domain link API and screen
 - [x] Combined card with rotate and history-purge steps
-- [ ] Scoring
+- [x] Scoring
 - Matching happens only within one owner's repos and verified domains, on project identifiers. Keys can't be compared, because no part of one is kept
 - A Supabase admin key, or a Firebase service account whose `project_id` matches, is critical. A Firebase web config match is info
 - A "likely" match (the repo names only one project) shows as critical (likely), with no score deduction and no grade cap. Only confirmed matches affect the site score
@@ -188,6 +188,8 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 Start at 100. Deduct per finding: critical −25, high −15, medium −7, low −2, info 0. Floor 0.
 Grades: A+ ≥95, A ≥85, B ≥70, C ≥55, D ≥40, F <40.
 Grade caps, on top of the points (the numeric score stays as calculated): no HTTPS or an expired/untrusted certificate caps the grade at F, and any other critical finding caps it at D. A scan that couldn't read the site has no score, and gets a grade only when one of the F caps applies.
+
+A confirmed admin key for a backend the site uses, leaked in one of the owner's repos, costs −25 and caps the grade at D from the next full scan. It counts once per project, however many commits, keys or repos are involved. It adds nothing if that scan already found the key on the site, or found a site key it can't tie to a project. Likely matches, keys marked as rotated and Firebase config matches never affect the score. Saved scans are never rewritten, and each report says what was counted.
 
 ## Security rules (non-negotiable)
 - **SSRF guard** on every outbound request: resolve DNS, block private/loopback/link-local/reserved/multicast IPs (v4 + v6), re-check after each redirect, max 5 redirects, timeouts, response size cap

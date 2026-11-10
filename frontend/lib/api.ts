@@ -83,6 +83,8 @@ export interface Scan {
   bot_protection: BotProtectionHelp | null;
   // Set when a backend check relied on an earlier verification.
   verification_note: string | null;
+  // Set when a leaked repo key changed this score, or was left out so it counts once.
+  correlation_note: string | null;
   findings: Finding[];
   total_findings: number;
   skipped: SkippedCheck[];

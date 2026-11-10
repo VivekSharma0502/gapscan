@@ -18,7 +18,13 @@ from app.checks.base import (
     StepCallback,
 )
 from app.checks.registry import CheckSpec, all_checks
-from app.checks.scoring import calculate_score, final_grade
+from app.checks.scoring import (
+    CorrelatedLeak,
+    calculate_score,
+    correlation_note,
+    counted_leaks,
+    final_grade,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +66,8 @@ class ScanReport(BaseModel):
     blocked_by: BotProtection | None = None
     # Set when a backend check relied on an earlier verification instead of a fresh one.
     verification_note: str | None = None
+    # Set when a leaked repo key changed this score, or was left out so it counts once.
+    correlation_note: str | None = None
 
 
 def _missing_input(spec: CheckSpec, ctx: ScanContext) -> Input | None:
@@ -139,7 +147,11 @@ def run_backend_checks(
 
 
 def run_checks(
-    ctx: ScanContext, *, on_step: StepCallback | None = None, allow_active: bool = False
+    ctx: ScanContext,
+    *,
+    on_step: StepCallback | None = None,
+    allow_active: bool = False,
+    correlated_leaks: Collection[CorrelatedLeak] = (),
 ) -> ScanReport:
     """Run the checks. Security: active checks are opt-in, so none run by accident."""
     findings, skipped = _evaluate(selected_checks(allow_active), ctx, on_step)
@@ -160,8 +172,11 @@ def run_checks(
             blocked_by=ctx.blocked_by,
         )
 
-    score = calculate_score(findings)
-    grade, grade_cap_reason = final_grade(score, findings)
+    # Only here, after the site could be read. A combined finding is never in findings, so
+    # the scorer can't sum it. It reaches the score only through this explicit list.
+    counted = counted_leaks(correlated_leaks, findings)
+    score = calculate_score(findings, counted)
+    grade, grade_cap_reason = final_grade(score, findings, counted)
     failed_count = sum(1 for item in skipped if not item.not_applicable)
     return ScanReport(
         hostname=ctx.hostname,
@@ -171,6 +186,7 @@ def run_checks(
         grade=grade,
         grade_cap_reason=grade_cap_reason,
         score_label=_partial_label(failed_count) if failed_count else None,
+        correlation_note=correlation_note(counted, set(correlated_leaks)),
         findings=findings,
         skipped=skipped,
         blocked_by=ctx.blocked_by,
