@@ -183,6 +183,34 @@ TEXT: dict[str, CheckText] = {
             backend=BackendFix(label="GapScan"),
         ),
     ),
+    "baas.backends_tested": CheckText(
+        title="Your backends were tested read-only",
+        fix=Fix(
+            what_it_means=(
+                "You confirmed these Firebase or Supabase backends are yours, so GapScan tested "
+                "them with read-only requests. It changed nothing and kept none of your data."
+            ),
+            how_to_fix=(
+                'Nothing to do on this card. The "Checked:" results in this report show what was '
+                "refused, and any other findings show what was open."
+            ),
+            backend=BackendFix(label="GapScan"),
+        ),
+    ),
+    "baas.backends_unanswered": CheckText(
+        title="Your backends couldn't be tested this time",
+        fix=Fix(
+            what_it_means=(
+                "You confirmed these backends are yours, but GapScan didn't get a reliable answer "
+                "from them, so it can't say whether their data is open to the public."
+            ),
+            how_to_fix=(
+                "Run another full scan. For Supabase, your site's scripts also need to contain "
+                'its public key and at least one .from("table") call.'
+            ),
+            backend=BackendFix(label="GapScan"),
+        ),
+    ),
     "baas.backends_found": CheckText(
         title="Backends found in your website's code",
         fix=Fix(

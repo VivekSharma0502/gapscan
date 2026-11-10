@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3b fix: backend card wording
+
+**Fixed**
+- The "Backends found in your website's code" card said GapScan hadn't tested a backend even after its owner confirmed it and the probes ran. That text now appears only for unconfirmed backends.
+- Confirmed backends that answered get a new "Your backends were tested read-only" card pointing to the "Checked:" results. Confirmed backends with no reliable answer get their own card, because calling them tested would be untrue.
+- Report text is looked up by check id, so these are separate checks. Reports from before this fix keep the old card until the site is scanned again. Restart the worker to pick this up.
+
 ## 2026-11-10: Phase 3, step 3b: Supabase probes
 
 **Added**

@@ -4,6 +4,8 @@ Security: evidence is built only from fixed masks, script paths on the verified 
 validated backend names and counts, so no key or data value can reach the database.
 """
 
+from collections.abc import Callable
+
 from app.checks.base import (
     BaasDiscovery,
     BaasKind,
@@ -23,6 +25,7 @@ from app.checks.registry import check, make_finding
 
 MAX_LOCATIONS = 5
 MAX_TABLES_LISTED = 10
+_ANSWERED_TABLE_STATES = (TableAccess.READABLE, TableAccess.NO_ROWS, TableAccess.REFUSED)
 
 _NO_RELIABLE_ANSWER = "This backend gave no reliable answer, so this could not be confirmed."
 
@@ -69,13 +72,55 @@ def _describe(backend: DiscoveredBackend) -> str:
     return f"{_KIND_LABELS[backend.kind]} {backend.identifier}"
 
 
+def _probe_answers(ctx: ScanContext) -> dict[DiscoveredBackend, bool]:
+    """Whether each probed backend gave a real answer. Only confirmed backends get probed."""
+    probes = ctx.baas_probes
+    if probes is None:
+        return {}
+    answers = {
+        DiscoveredBackend(BaasKind.FIREBASE_RTDB, probe.host): probe.readable is not None
+        for probe in probes.rtdb
+    }
+    answers |= {
+        DiscoveredBackend(BaasKind.FIREBASE_STORAGE, probe.bucket): probe.listable is not None
+        for probe in probes.storage
+    }
+    answers |= {
+        DiscoveredBackend(BaasKind.SUPABASE, project.ref): any(
+            table.access in _ANSWERED_TABLE_STATES for table in project.tables
+        )
+        for project in probes.supabase
+    }
+    return answers
+
+
+def _backend_card(
+    ctx: ScanContext, check_id: str, belongs: Callable[[bool | None], bool]
+) -> Finding | None:
+    """Build one card from the backends in one state. None means not probed, so unconfirmed."""
+    baas = _discovery(ctx)
+    answers = _probe_answers(ctx)
+    backends = [item for item in baas.backends if belongs(answers.get(item))]
+    if not backends:
+        return None
+    names = "; ".join(_describe(item) for item in backends)
+    return make_finding(check_id, Severity.INFO, f"{names}. {_coverage(baas)}")
+
+
 @check("baas.backends_found", Category.BAAS, requires=[Input.BAAS], active=True)
 def backends_found(ctx: ScanContext) -> Finding | None:
-    baas = _discovery(ctx)
-    if not baas.backends:
-        return None
-    names = "; ".join(_describe(item) for item in baas.backends)
-    return make_finding("baas.backends_found", Severity.INFO, f"{names}. {_coverage(baas)}")
+    return _backend_card(ctx, "baas.backends_found", lambda answered: answered is None)
+
+
+@check("baas.backends_tested", Category.BAAS, requires=[Input.BAAS], active=True)
+def backends_tested(ctx: ScanContext) -> Finding | None:
+    return _backend_card(ctx, "baas.backends_tested", lambda answered: answered is True)
+
+
+@check("baas.backends_unanswered", Category.BAAS, requires=[Input.BAAS], active=True)
+def backends_unanswered(ctx: ScanContext) -> Finding | None:
+    """Confirmed but without a real answer, so it can't honestly be called tested."""
+    return _backend_card(ctx, "baas.backends_unanswered", lambda answered: answered is False)
 
 
 @check("baas.scripts_unread", Category.BAAS, requires=[Input.BAAS], active=True)
