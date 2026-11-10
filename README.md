@@ -90,7 +90,7 @@ GapScan points outbound requests at addresses supplied by its users, so it treat
 - **Polite scanner.** Scans identify themselves with an honest User-Agent, send at most about two requests a second to any host, pause randomly between active checks, and stop requesting a site at its first bot-protection challenge.
 - **Read-only probes.** Backend probes read and never write. Nothing is sent to a backend until the domain's owner confirms it's theirs, and results keep only yes or no answers, counts and table names, never rows.
 - **Secrets never stored.** gitleaks runs with `--redact`, and only a masked form with a fixed prefix such as `AKIA****` is saved. No characters of a real key are kept, so keys are never compared either.
-- **Access and input.** Every record is owner-only, and other people's IDs answer 404. All input is validated with Pydantic, GitHub webhook signatures are verified, CORS is an explicit allowlist, and API routes are rate limited.
+- **Access and input.** Domains, repositories and full reports are owner-only, and other people's IDs answer 404. All input is validated with Pydantic, GitHub webhook signatures are verified, CORS is an explicit allowlist, and scan and change routes are rate limited.
 
 ### About GapScanBot, for site owners
 

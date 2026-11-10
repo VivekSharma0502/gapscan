@@ -179,7 +179,7 @@ Repository scanning uses a GitHub App, which is separate from the OAuth App used
    base64 -w0 ~/Downloads/<downloaded-file>.pem
    ```
 
-7. Delete the downloaded `.pem` once step 6 of the next section is done. You can generate a new key at any time.
+7. Once the key is saved in `.env` (next section), delete the downloaded `.pem`. You can generate a new key at any time.
 
 ## 6. Fill in `.env`
 
