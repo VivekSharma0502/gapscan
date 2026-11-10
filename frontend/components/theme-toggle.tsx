@@ -6,7 +6,7 @@ import { useLayoutEffect } from "react";
 import { Button } from "@/components/ui/button";
 
 // Also read by the inline script in app/layout.tsx.
-const STORAGE_KEY = "scankit.theme";
+const STORAGE_KEY = "gapscan.theme";
 
 function readStoredTheme(): string | null {
   try {

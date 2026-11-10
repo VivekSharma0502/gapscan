@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Local docker-compose services. Production sets both through the environment.
     # 127.0.0.1, not localhost: the services are published on IPv4 only, and on Windows
     # localhost tries IPv6 first, which stalls every new connection.
-    database_url: str = "postgresql+psycopg://scankit:scankit_dev@127.0.0.1:5432/scankit"
+    database_url: str = "postgresql+psycopg://gapscan:gapscan_dev@127.0.0.1:5432/gapscan"
     redis_url: str = "redis://127.0.0.1:6379/0"
 
     # Where rate limit counters live. Empty means Redis, so limits hold across API processes.

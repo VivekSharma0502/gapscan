@@ -25,7 +25,7 @@ export const metadata: Metadata = {
 
 // Runs before first paint, so a visitor who chose light never sees a dark flash.
 // A fixed string with no outside input, so it can't be used to inject a script.
-const THEME_SCRIPT = `(function(){try{if(localStorage.getItem("scankit.theme")==="light")document.documentElement.classList.remove("dark")}catch(e){}})()`;
+const THEME_SCRIPT = `(function(){try{if(localStorage.getItem("gapscan.theme")==="light")document.documentElement.classList.remove("dark")}catch(e){}})()`;
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (

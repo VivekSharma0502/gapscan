@@ -9,7 +9,7 @@ from app.core import db
 from app.core.config import settings
 from app.repos.scanner import sweep_abandoned_workspaces
 
-celery_app = Celery("scankit", broker=settings.redis_url, include=["app.workers.tasks"])
+celery_app = Celery("gapscan",broker=settings.redis_url, include=["app.workers.tasks"])
 
 celery_app.conf.update(
     # Security: JSON only. Accepting pickle would let anyone who can write to Redis run code.

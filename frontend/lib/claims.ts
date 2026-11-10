@@ -6,7 +6,7 @@
 
 import { claimScans } from "@/lib/api";
 
-const STORAGE_KEY = "scankit.claims";
+const STORAGE_KEY = "gapscan.claims";
 const MAX_CLAIMS = 20;
 
 interface StoredClaim {

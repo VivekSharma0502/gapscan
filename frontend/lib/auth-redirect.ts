@@ -4,9 +4,9 @@
 // can stay one exact URL. localStorage rather than sessionStorage because a magic link
 // opens in a new tab.
 
-const STORAGE_KEY = "scankit.auth_next";
-const METHOD_KEY = "scankit.auth_method";
-const BASE = "https://scankit.invalid";
+const STORAGE_KEY = "gapscan.auth_next";
+const METHOD_KEY = "gapscan.auth_method";
+const BASE = "https://gapscan.invalid";
 const DEFAULT_PATH = "/dashboard";
 
 export type SignInMethod = "github" | "email";

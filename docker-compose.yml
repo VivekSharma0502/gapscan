@@ -18,15 +18,15 @@ services:
     # Security: dev-only credentials, so this is published on loopback only.
     # Production uses Supabase, with its own URL in DATABASE_URL.
     environment:
-      POSTGRES_USER: scankit
-      POSTGRES_PASSWORD: scankit_dev
-      POSTGRES_DB: scankit
+      POSTGRES_USER: gapscan
+      POSTGRES_PASSWORD: gapscan_dev
+      POSTGRES_DB: gapscan
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U scankit -d scankit"]
+      test: ["CMD-SHELL", "pg_isready -U gapscan -d gapscan"]
       interval: 5s
       timeout: 3s
       retries: 5
