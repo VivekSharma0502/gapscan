@@ -40,6 +40,15 @@ class ScanMode(StrEnum):
     BACKENDS = "backends"
 
 
+class IdentifierBasis(StrEnum):
+    """How a finding was tied to a backend project."""
+
+    KEY_CLAIM = "key_claim"
+    SAME_FILE = "same_file"
+    # The repo names only one project. A guess, so it never affects the score.
+    ONLY_PROJECT = "only_project"
+
+
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -158,6 +167,12 @@ class FindingRecord(SQLModel, table=True):
     # SHA-256 of gitleaks' commit:file:rule:line. Hashed for a fixed size, since paths can be
     # longer than a Postgres index entry allows.
     fingerprint: str | None = Field(default=None, max_length=64)
+    # The backend project this secret belongs to, such as a Supabase ref. An identifier
+    # the project's own code already exposes, never any part of the key.
+    backend_identifier: str | None = Field(default=None, max_length=253)
+    identifier_basis: IdentifierBasis | None = Field(
+        default=None, sa_column=_enum_column(IdentifierBasis, nullable=True)
+    )
     # For a repo finding this is the first-seen date: a rescan keeps the existing row.
     created_at: datetime = Field(default_factory=utc_now, sa_column=_timestamp_column())
 

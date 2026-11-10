@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3c-1: correlation tables
+
+**Added**
+- Tables for connecting repos to sites: `repo_identifiers`, `repo_domain_links`, `correlated_findings` and `correlated_finding_members`. `findings` gains `backend_identifier` and `identifier_basis`, and `domain_backends` gains `firebase_project_id`. Nothing uses them yet, so behaviour is unchanged. Run `alembic upgrade head`.
+
+**Security**
+- These tables hold project identifiers and states only. Nothing has a column for a key.
+- Combined findings live apart from `findings`, so the scorer can't count them by accident.
+
+**Decisions**
+- Originals link to a combined finding through a separate table instead of a column on `findings`. One key can sit behind cards for two sites, and these rows also record which fingerprints a rotation covered.
+- Only one card can be open per domain, repo, kind and project. A card marked as rotated stays as history, so a key found later opens a new one.
+
 ## 2026-11-10: Phase 3, step 3b fix: backend card wording
 
 **Fixed**

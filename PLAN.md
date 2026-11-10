@@ -100,8 +100,20 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - Nothing is sent to a backend until the domain's owner confirms it's theirs, because a verified site's code can name someone else's project
 - Firestore isn't covered, because probing it needs collection names
 
-**Still to do**
-- [ ] Correlation: repo finding mentions a project/domain the user owns → link findings, raise severity if live exposure confirmed
+**Step 3c: repo and site correlation (combines stored data, no new outbound requests)**
+- [x] Tables and migration
+- [ ] Local identifier extraction during repo scans
+- [ ] Site side: keep the Firebase project ID, and tie service-key findings to a project
+- [ ] Correlation logic and link suggestions
+- [ ] Repo-to-domain link API and screen
+- [ ] Combined card with rotate and history-purge steps
+- [ ] Scoring
+- Matching happens only within one owner's repos and verified domains, on project identifiers. Keys can't be compared, because no part of one is kept
+- A Supabase admin key, or a Firebase service account whose `project_id` matches, is critical. A Firebase web config match is info
+- A "likely" match (the repo names only one project) shows as critical (likely), with no score deduction and no grade cap. Only confirmed matches affect the site score
+- A confirmed match counts once per project, and not at all if that site scan already has a service-key finding for it
+- The owner can mark a key as rotated, recording who and when. A fingerprint not covered by that rotation opens a new card. A key copied to a new commit or line also has a new fingerprint, so it reopens too
+- Real-world test: rotate the key in the existing `gapscan-test` Supabase project rather than deleting it, because the test site uses it
 
 ### Phase 4 — Monitoring + reports (Week 5)
 - Celery Beat scheduled rescans (weekly free / daily paid)
@@ -122,12 +134,16 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - **domains**: id, owner_id, hostname (unique per owner, not globally), verify_token, verified_at, verified_method, created_at
 - **github_install_states**: id, owner_id, token_hash, expires_at, created_at (one-time, ties an install redirect to the user who started it)
 - **github_installations**: id, owner_id, installation_id, account_id, account_login, suspended_at, created_at
-- **domain_backends**: id, domain_id, kind (firebase_rtdb|firebase_storage|supabase), identifier, first_seen_at, last_seen_at, confirmed_at (null = never probed)
+- **domain_backends**: id, domain_id, kind (firebase_rtdb|firebase_storage|supabase), identifier, firebase_project_id, first_seen_at, last_seen_at, confirmed_at (null = never probed)
 - **domain_backend_tables**: id, backend_id, name, access (readable|no_rows|refused), last_seen_at, meant_to_be_public_at (names and states only, never rows)
+- **repo_identifiers**: id, repo_id, kind (supabase_ref|firebase_project|firebase_rtdb|firebase_bucket), value, first_seen_at, last_seen_at
+- **repo_domain_links**: id, owner_id, repo_id, domain_id, state (suggested|confirmed|dismissed), origin (manual|automatic), created_at, updated_at
+- **correlated_findings**: id, owner_id, domain_id, repo_id, kind (supabase_admin|firebase_admin|firebase_config), severity, confidence (confirmed|likely), identifier, first_seen_at, last_seen_at, rotated_at, rotated_by
+- **correlated_finding_members**: correlated_finding_id, finding_id (the originals behind a combined finding)
 - **repos**: id, owner_id, installation_id, github_repo_id, full_name, is_private, first_full_scan_at, needs_full_scan, created_at
 - **github_deliveries**: delivery_id, received_at (webhook replay protection)
 - **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, before_sha, after_sha, target, mode (quick|full|backends), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, grade_cap_reason, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
-- **findings**: id, scan_id, check_id, category, severity (critical|high|medium|low|info), title, evidence_masked, location, linked_finding_id, repo_id, rule_id, file_path, line, commit_sha, fingerprint, created_at (first seen, for repo findings)
+- **findings**: id, scan_id, check_id, category, severity (critical|high|medium|low|info), title, evidence_masked, location, linked_finding_id, repo_id, rule_id, file_path, line, commit_sha, fingerprint, backend_identifier, identifier_basis (key_claim|same_file|only_project), created_at (first seen, for repo findings)
 - **scan_claims**: id, scan_id, token_hash, created_at, claimed_by, claimed_at (one per anonymous request, redeemed after signup. A redeemed row grants that user the full report, since scans within the reuse window are shared)
 - **notification_settings**: owner_id, email_enabled, telegram_chat_id, min_severity
 - Check text (what it means / fixes per platform) lives in code, keyed by `check_id`.

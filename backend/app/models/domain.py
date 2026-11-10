@@ -54,6 +54,8 @@ class DomainBackend(SQLModel, table=True):
     )
     kind: BaasKind = Field(sa_column=_enum_column(BaasKind))
     identifier: str = Field(max_length=253)
+    # Lets a repo's Firebase config be matched to this backend. Null until a scan sets it.
+    firebase_project_id: str | None = Field(default=None, max_length=63)
     first_seen_at: datetime = Field(
         default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False)
     )
