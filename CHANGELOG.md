@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3c-6: the combined finding card
+
+**Added**
+- Combined findings now appear above the originals on full scan reports and on a repository's findings page. Each has steps to replace the key, steps to clean up git history, and the original findings, which stay viewable. Restart the API.
+- An "I've rotated this key" option. It records who marked it and when, shows "Owner marked as rotated", drops the finding to info and keeps the history reminder. A repo finding that rotation didn't cover raises a new card.
+
+**Security**
+- Combined findings are owner only, with only masked evidence. They never appear on quick or anonymous reports, because only a full report given to its owner names a domain.
+- A rotation is recorded as the owner's word, because checking it would mean holding the key or contacting the provider.
+
+**Decisions**
+- Steps were checked against the current Supabase, Firebase, Google Cloud and GitHub documentation, and each links to its source. Cleaning history comes after replacing the key, because GitHub says a replaced key may not need a rewrite at all.
+
 ## 2026-11-10: Phase 3, step 3c-5: linking repos to websites
 
 **Added**

@@ -87,6 +87,8 @@ export interface Scan {
   total_findings: number;
   skipped: SkippedCheck[];
   teaser: boolean;
+  // Only on a full report for its owner.
+  domain_id: string | null;
 }
 
 export type VerificationMethod = "dns" | "file";
@@ -147,6 +149,48 @@ export interface RepoLink {
   origin: "manual" | "automatic";
   updated_at: string;
 }
+
+export interface HistoryStep {
+  text: string;
+  command: string | null;
+}
+
+export interface CombinedOriginal {
+  id: string;
+  source: "repository" | "website";
+  title: string;
+  masked: string;
+  location: string | null;
+  first_seen_at: string;
+}
+
+export interface CombinedFinding {
+  id: string;
+  kind: "supabase_admin" | "firebase_admin" | "firebase_config";
+  severity: Severity;
+  confidence: "confirmed" | "likely";
+  identifier: string;
+  domain_id: string;
+  hostname: string;
+  repo_id: string;
+  repo_full_name: string;
+  title: string;
+  note: string | null;
+  what_it_means: string;
+  provider_name: string;
+  rotate_steps: string[];
+  rotate_url: string;
+  docs_url: string;
+  history_steps: HistoryStep[];
+  history_docs_url: string | null;
+  can_mark_rotated: boolean;
+  rotated_at: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  originals: CombinedOriginal[];
+}
+
+export type CombinedFindingScope = { domainId: string } | { repoId: string };
 
 export interface VerifyFailure {
   method: VerificationMethod;
@@ -505,6 +549,25 @@ export function setRepoLinkState(
 export function removeRepoLink(id: string): Promise<void> {
   return request(`/api/repo-links/${encodeURIComponent(id)}`, {
     method: "DELETE",
+  });
+}
+
+export function listCombinedFindings(
+  scope: CombinedFindingScope,
+  signal?: AbortSignal,
+): Promise<CombinedFinding[]> {
+  const query =
+    "domainId" in scope
+      ? `domain_id=${encodeURIComponent(scope.domainId)}`
+      : `repo_id=${encodeURIComponent(scope.repoId)}`;
+  return request(`/api/combined-findings?${query}`, { signal });
+}
+
+export function markCombinedFindingRotated(
+  id: string,
+): Promise<CombinedFinding> {
+  return request(`/api/combined-findings/${encodeURIComponent(id)}/rotated`, {
+    method: "POST",
   });
 }
 

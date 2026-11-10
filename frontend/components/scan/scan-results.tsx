@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { CombinedFindings } from "@/components/combined/combined-findings";
 import { FindingCard } from "@/components/scan/finding-card";
 import { ScoreGauge } from "@/components/scan/score-gauge";
 import { Badge } from "@/components/ui/badge";
@@ -295,6 +296,9 @@ export function ScanResults({ scan }: { scan: Scan }) {
         <BotProtectionNotice help={scan.bot_protection} />
       )}
       <ActiveChecksNotice scan={scan} />
+      {scan.domain_id && user && (
+        <CombinedFindings scope={{ domainId: scan.domain_id }} />
+      )}
 
       {shown > 0 && (
         <section

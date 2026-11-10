@@ -143,6 +143,8 @@ class ScanOut(BaseModel):
     skipped: list[SkippedCheck]
     # True when findings are cut to the top few, so the UI can offer the full report.
     teaser: bool
+    # Only on a full report for its owner, which is the only report combined findings join.
+    domain_id: UUID | None = None
 
 
 class ScanSummary(BaseModel):
@@ -457,4 +459,5 @@ def get_scan(scan_id: UUID, session: SessionDep, viewer: ViewerDep) -> ScanOut:
         total_findings=len(records),
         skipped=[SkippedCheck(**item) for item in scan.skipped_json] if full_report else [],
         teaser=not full_report,
+        domain_id=scan.domain_id if full_report and scan.mode is ScanMode.FULL else None,
     )

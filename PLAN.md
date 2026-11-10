@@ -106,7 +106,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - [x] Site side: keep the Firebase project ID, and tie service-key findings to a project
 - [x] Correlation logic and link suggestions
 - [x] Repo-to-domain link API and screen
-- [ ] Combined card with rotate and history-purge steps
+- [x] Combined card with rotate and history-purge steps
 - [ ] Scoring
 - Matching happens only within one owner's repos and verified domains, on project identifiers. Keys can't be compared, because no part of one is kept
 - A Supabase admin key, or a Firebase service account whose `project_id` matches, is critical. A Firebase web config match is info
@@ -171,6 +171,8 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 | POST | /api/repo-links | auth, 30/min per IP. Links a repo to a verified domain, both the owner's |
 | PATCH | /api/repo-links/{id} | auth, 30/min per IP. Confirms or dismisses a link. Confirming needs a verified domain |
 | DELETE | /api/repo-links/{id} | auth, 30/min per IP. Removes a link. A pair still sharing a backend returns as a suggestion |
+| GET | /api/combined-findings | auth, owner only. Combined findings, optionally for one `domain_id` or `repo_id`, with masked originals |
+| POST | /api/combined-findings/{id}/rotated | auth, 30/min per IP. The owner says a leaked key was replaced. Records who and when, and drops it to info |
 | POST | /api/github/webhook | verify `X-Hub-Signature-256` |
 | GET | /api/dashboard | auth. Per-domain standing and trend, plus recent scans |
 | GET | /api/domains/{id}/backends | auth, owner only. Backends named in the site's code |

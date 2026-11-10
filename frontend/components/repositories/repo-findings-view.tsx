@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { CombinedFindings } from "@/components/combined/combined-findings";
 import { RepoFindingCard } from "@/components/repositories/repo-finding-card";
 import {
   isScanning,
@@ -166,6 +167,8 @@ export function RepoFindingsView({ id }: { id: string }) {
           <ScanNowButton repoId={data.id} scanning={scanning} />
         </div>
       </div>
+
+      <CombinedFindings scope={{ repoId: data.id }} />
 
       {data.findings.length > 0 ? (
         <Findings data={data} />

@@ -69,7 +69,7 @@ def _require_verified(domain: Domain | None) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail=_VERIFY_FIRST)
 
 
-def _refresh(session: Session, owner_id: UUID) -> None:
+def refresh_saved_change(session: Session, owner_id: UUID) -> None:
     # The owner's answer is already saved. If this fails, the next scan brings it up to date.
     try:
         refresh_correlations(session, owner_id)
@@ -145,7 +145,7 @@ def create_link(
         raise HTTPException(
             status.HTTP_409_CONFLICT, detail="That link was just changed. Please try again."
         ) from exc
-    _refresh(session, viewer.id)
+    refresh_saved_change(session, viewer.id)
     return _link_out(session, link)
 
 
@@ -166,7 +166,7 @@ def answer_link(
     link.state = LinkState(body.state)
     link.updated_at = utc_now()
     session.commit()
-    _refresh(session, viewer.id)
+    refresh_saved_change(session, viewer.id)
     return _link_out(session, link)
 
 
@@ -183,4 +183,4 @@ def delete_link(
     # what makes it the way to undo "not related".
     session.delete(_owned_link(session, link_id, viewer.id))
     session.commit()
-    _refresh(session, viewer.id)
+    refresh_saved_change(session, viewer.id)
