@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3c-2: project identifiers from repo scans
+
+**Added**
+- Repo scans now record which Supabase projects and Firebase projects, databases and buckets a repo points at, in `repo_identifiers`. Restart the worker, then run **Scan now** on a repo to fill these in for findings it already has.
+- A Supabase admin key found in a repo is tied to its project: from the key's `ref` claim, from a Supabase URL in the same file, or, labelled as a guess, because the repo names only one project. A Firebase service account file is tied to its `project_id`.
+
+**Security**
+- This runs on the temporary clone the scan already has, after the GitHub token is revoked, so it makes no new outbound requests.
+- Only identifiers are kept. File text is searched and let go, `git grep -o` returns only the short match, and each value must fit the exact shape of an official identifier.
+- A failure here costs only the link between repo and site. It never fails the scan, and it leaves the identifiers already saved in place.
+
 ## 2026-11-10: Phase 3, step 3c-1: correlation tables
 
 **Added**

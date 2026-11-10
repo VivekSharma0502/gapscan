@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import delete
-from sqlmodel import select, update
+from sqlmodel import Session, select, update
 
 from app.checks.active_collector import attach_probes, without_probes
 from app.checks.baas_collector import discover_backends
@@ -39,9 +39,10 @@ from app.checks.runner import (
     selected_checks,
 )
 from app.core.db import new_session
+from app.models.correlation import RepoIdentifier
 from app.models.domain import Domain, DomainBackend, DomainBackendTable
 from app.models.github import GithubInstallation, Repo
-from app.models.scan import FindingRecord, Scan, ScanJobStatus, utc_now
+from app.models.scan import FindingRecord, IdentifierBasis, Scan, ScanJobStatus, utc_now
 from app.repos.scanner import REPO_STEPS, RepoScanLimitError, RepoScanResult, scan_repository
 from app.workers.celery_app import celery_app
 
@@ -270,6 +271,28 @@ def _repo_target(scan_id: UUID) -> _RepoTarget | None:
         )
 
 
+def _save_repo_identifiers(session: Session, repo_id: UUID, result: RepoScanResult) -> None:
+    # A failed read says nothing about the repo, so what's saved must not be cleared by it.
+    if result.identifiers is None:
+        return
+    now = utc_now()
+    known = {
+        (row.kind, row.value): row
+        for row in session.exec(select(RepoIdentifier).where(RepoIdentifier.repo_id == repo_id))
+    }
+    for kind, value in result.identifiers:
+        row = known.get((kind, value))
+        if row is None:
+            session.add(RepoIdentifier(repo_id=repo_id, kind=kind, value=value))
+        else:
+            row.last_seen_at = now
+    # A push only looks at new commits, so only a complete scan can show one has gone.
+    if result.full_history and not result.truncated:
+        for pair, row in known.items():
+            if pair not in result.identifiers:
+                session.delete(row)
+
+
 def _save_repo_report(
     scan_id: UUID, repo_id: UUID, result: RepoScanResult, steps: Sequence[str]
 ) -> None:
@@ -298,9 +321,22 @@ def _save_repo_report(
             return
 
         # A secret already on file keeps its row, and so its first-seen date.
-        known = set(
-            session.exec(select(FindingRecord.fingerprint).where(FindingRecord.repo_id == repo_id))
-        )
+        known = {
+            row.fingerprint: row
+            for row in session.exec(select(FindingRecord).where(FindingRecord.repo_id == repo_id))
+        }
+        # Findings from before identifiers existed get theirs the next time they're seen.
+        for hit in result.hits:
+            existing = known.get(hit.fingerprint)
+            if existing is None or hit.backend_identifier is None:
+                continue
+            # A guess never replaces a project worked out from the key or its file.
+            if hit.identifier_basis is IdentifierBasis.ONLY_PROJECT and (
+                existing.identifier_basis not in (None, IdentifierBasis.ONLY_PROJECT)
+            ):
+                continue
+            existing.backend_identifier = hit.backend_identifier
+            existing.identifier_basis = hit.identifier_basis
         session.add_all(
             FindingRecord(
                 scan_id=scan_id,
@@ -316,6 +352,8 @@ def _save_repo_report(
                 line=hit.line,
                 commit_sha=hit.commit_sha,
                 fingerprint=hit.fingerprint,
+                backend_identifier=hit.backend_identifier,
+                identifier_basis=hit.identifier_basis,
             )
             for hit in result.hits
             if hit.fingerprint not in known
@@ -333,6 +371,7 @@ def _save_repo_report(
                     )
                 )
         repo.full_name = result.full_name
+        _save_repo_identifiers(session, repo_id, result)
         session.commit()
 
 

@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
 from app.checks.base import Severity
+from app.models.scan import IdentifierBasis
 from app.repos.rules import rule_for
 
 MAX_FINDINGS = 1000
@@ -50,6 +51,9 @@ class SecretHit:
     line: int
     commit_sha: str
     fingerprint: str
+    # Which backend project this secret belongs to, when that could be worked out.
+    backend_identifier: str | None = None
+    identifier_basis: IdentifierBasis | None = None
 
 
 @dataclass(frozen=True)

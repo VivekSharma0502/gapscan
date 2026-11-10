@@ -150,6 +150,18 @@ def find_table_names(text: str) -> set[str]:
     }
 
 
+def find_service_role_refs(text: str) -> set[str]:
+    """Return the projects that service_role keys in this text belong to, not the keys."""
+    refs: set[str] = set()
+    for match in _JWT_RE.finditer(text):
+        claims = _supabase_claims(match.group(0))
+        ref = claims.get("ref")
+        if claims.get("role") == "service_role" and isinstance(ref, str):
+            if is_official_supabase_ref(ref):
+                refs.add(ref)
+    return refs
+
+
 def find_exposed_keys(text: str, location: str) -> list[ExposedServiceKey]:
     """Report server-only Supabase keys. The keys themselves are not kept or returned."""
     found: list[ExposedServiceKey] = []

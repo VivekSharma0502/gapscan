@@ -29,6 +29,12 @@ from app.core.github_app import (
     get_repository,
     revoke_installation_token,
 )
+from app.repos.identifiers import (
+    GREP_PATTERNS,
+    IdentifierPair,
+    attach_project_identifiers,
+    parse_grep_output,
+)
 from app.repos.report import SecretHit, parse_report
 
 logger = logging.getLogger(__name__)
@@ -45,6 +51,8 @@ MAX_SCANNED_FILE_MB = 5
 CLONE_TIMEOUT_SECONDS = 180.0
 GITLEAKS_TIMEOUT_SECONDS = 300.0
 GIT_READ_TIMEOUT_SECONDS = 30.0
+# Config files and service account files are small, so anything larger is neither.
+MAX_IDENTIFIER_FILE_BYTES = 2 * 1024 * 1024
 POLL_SECONDS = 1.0
 KILL_WAIT_SECONDS = 15.0
 
@@ -110,6 +118,9 @@ class RepoScanResult:
     truncated: bool
     # False when only some commits were scanned.
     full_history: bool
+    # The backend projects this repo points at. Identifiers only, never a key.
+    # None means they couldn't be read, which is different from there being none.
+    identifiers: frozenset[IdentifierPair] | None = frozenset()
 
 
 @dataclass(frozen=True)
@@ -305,6 +316,55 @@ def _git_read(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _git_bytes(repo: Path, *args: str, empty_on: tuple[int, ...] = ()) -> bytes | None:
+    """Run a local git read. Returns None if git reports failure."""
+    result = subprocess.run(  # noqa: S603
+        [_tool("git"), *_GIT_HARDENING, "-C", str(repo), *args],
+        env=_child_env(),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=GIT_READ_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if result.returncode in empty_on:
+        return b""
+    return result.stdout if result.returncode == 0 else None
+
+
+def _file_at_commit(repo: Path, hit: SecretHit) -> str | None:
+    # Read from the object database, because the secret may be long gone from the latest code.
+    spec = f"{hit.commit_sha}:{hit.file_path}"
+    size = _git_bytes(repo, "cat-file", "-s", spec)
+    if size is None or int(size) > MAX_IDENTIFIER_FILE_BYTES:
+        return None
+    blob = _git_bytes(repo, "cat-file", "blob", spec)
+    return blob.decode("utf-8", "replace") if blob is not None else None
+
+
+def read_identifiers(
+    repo: Path, hits: list[SecretHit]
+) -> tuple[list[SecretHit], frozenset[IdentifierPair] | None]:
+    """Find which projects this repo and its secrets point at, using only the local clone.
+
+    Security: runs after the token is revoked, with no network involved. A failure here costs
+    only the links between repo and site, so it never fails the scan.
+    """
+    try:
+        pattern_args = [arg for pattern in GREP_PATTERNS for arg in ("-e", pattern)]
+        # git grep exits with 1 when nothing matched, and higher when it actually failed.
+        output = _git_bytes(
+            repo, "grep", "-I", "-h", "-o", "-E", *pattern_args, "HEAD", empty_on=(1,)
+        )
+        if output is None:
+            raise RepoScanError("git grep failed")
+        head = parse_grep_output(output.decode("utf-8", "replace"))
+        return attach_project_identifiers(hits, head, lambda hit: _file_at_commit(repo, hit))
+    except (subprocess.SubprocessError, OSError, ValueError, RepoScanError) as exc:
+        # Security: only the error type is logged, since a message could echo repo content.
+        logger.warning("could not read project identifiers: %s", type(exc).__name__)
+        return hits, None
+
+
 def _has_commit(repo: Path, sha: str) -> bool:
     return _git_read(repo, "cat-file", "-e", f"{sha}^{{commit}}").returncode == 0
 
@@ -417,9 +477,11 @@ def scan_repository(
             return RepoScanResult(repository.full_name, [], truncated=False, full_history=True)
         commit_range = log_range(workspace.repo, before_sha, after_sha)
         report = parse_report(run_gitleaks(workspace, commit_range))
+        hits, identifiers = read_identifiers(workspace.repo, report.hits)
         return RepoScanResult(
             repository.full_name,
-            report.hits,
+            hits,
             truncated=report.truncated,
             full_history=commit_range is None,
+            identifiers=identifiers,
         )
