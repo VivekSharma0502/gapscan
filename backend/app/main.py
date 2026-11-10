@@ -1,9 +1,12 @@
-from fastapi import FastAPI, Request, status
+import logging
+
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from starlette.middleware.base import RequestResponseEndpoint
 
 from app.api.combined_findings import router as combined_findings_router
 from app.api.dashboard import router as dashboard_router
@@ -16,6 +19,8 @@ from app.api.scans import router as scans_router
 from app.core.config import settings
 from app.core.product import PRODUCT_NAME
 from app.core.rate_limit import limiter
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title=f"{PRODUCT_NAME} API")
 
@@ -32,12 +37,29 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_exception_handler(RedisError, redis_unavailable)
 
+
+# Registered before CORSMiddleware so it runs inside it. Starlette's own 500 response is built
+# outside all middleware, has no CORS header, and so looks like a network failure to the browser.
+@app.middleware("http")
+async def answer_unhandled_errors(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    try:
+        return await call_next(request)
+    except Exception:
+        # Security: the detail stays in the server log. Visitors get a fixed message, and the
+        # query string isn't logged.
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Something went wrong on our side. Please try again."},
+        )
+
+
 # Security: only the configured frontend origins, and only the methods and headers in use.
 # Extend allow_methods/allow_headers when routes need them, not preemptively.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     # Security: sign-in uses this bearer header, not cookies, so allow_credentials stays off
     # and another site can't ride on a visitor's session.
     allow_headers=["Authorization", "Content-Type"],

@@ -8,8 +8,11 @@ const TIMEOUT_MS = 15_000;
 const VERIFY_TIMEOUT_MS = 30_000;
 // Linking makes several calls to Supabase and GitHub, one after another.
 const GITHUB_LINK_TIMEOUT_MS = 60_000;
+const HEALTH_TIMEOUT_MS = 5_000;
 const UNREACHABLE_MESSAGE =
   "We couldn't reach the scanner. Check your connection and try again.";
+const BLOCKED_MESSAGE =
+  "The scanner is running, but it blocked this request. Refresh the page and try again.";
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 export type Platform = "vercel" | "netlify" | "nginx" | "cloudflare";
@@ -354,6 +357,21 @@ function errorMessage(status: number, body: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
+// A browser reports a refused CORS preflight exactly like a dropped connection and hides
+// the status, so the only way to tell them apart is to ask whether the API is up.
+async function networkFailureMessage(timedOut: boolean): Promise<string> {
+  if (timedOut) return UNREACHABLE_MESSAGE;
+  try {
+    const health = await fetch(`${API_URL}/api/health`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+    });
+    return health.ok ? BLOCKED_MESSAGE : UNREACHABLE_MESSAGE;
+  } catch {
+    return UNREACHABLE_MESSAGE;
+  }
+}
+
 async function send(
   path: string,
   init: RequestInit,
@@ -375,7 +393,7 @@ async function send(
   } catch (error) {
     // The caller cancelled, so this isn't a failure to report.
     if (init.signal?.aborted) throw error;
-    throw new ApiError(UNREACHABLE_MESSAGE, 0);
+    throw new ApiError(await networkFailureMessage(timeout.aborted), 0);
   }
 }
 

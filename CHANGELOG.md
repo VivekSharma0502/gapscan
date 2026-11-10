@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-10: Fix: "Yes, link them" failed in the browser
+
+**Fixed**
+- `PATCH` was missing from the CORS allowed methods, so the browser's preflight got a 400 and answering a repo link suggestion never reached the API. Restart the API.
+- An unhandled server error now returns a JSON 500 with CORS headers, so the page shows it instead of "couldn't reach the scanner".
+- When a request is blocked but the API is up, the page now says so. Browsers hide the status of a refused preflight, so the page checks `/api/health` to tell this apart from a dropped connection.
+
+**Security**
+- CORS still allows only the methods and headers our routes use, and `allow_origins` is unchanged. Details of a 500 stay in the server log.
+
 ## 2026-11-10: Phase 3, step 3c-7: leaked repo keys in the site score
 
 **Added**
