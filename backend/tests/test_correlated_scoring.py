@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine
 from sqlmodel import Session, select
 
@@ -24,6 +25,9 @@ from app.checks.scoring import (
     counted_leaks,
     final_grade,
 )
+from app.core.auth import Viewer, get_viewer
+from app.core.rate_limit import limiter
+from app.main import app
 from app.models import CorrelatedFinding, Domain, FindingRecord, Scan
 from app.models.correlation import CorrelationKind, MatchConfidence
 from app.models.scan import IdentifierBasis, ScanMode, TargetType, utc_now
@@ -293,6 +297,42 @@ def test_a_likely_match_has_no_score_effect(db_engine: Engine, world: World) -> 
     assert scan.score == baseline()
     assert scan.grade != "D"
     assert scan.correlation_note is None
+
+
+@pytest.mark.usefixtures("site")
+def test_rotate_reopen_rotate_sticks_through_a_full_scan(db_engine: Engine, world: World) -> None:
+    leak(db_engine, world)
+    card_id = only_card(db_engine).id
+    url = f"/api/combined-findings/{card_id}"
+    viewer = Viewer(id=world.owner, email="person@example.com", name=None)
+    app.dependency_overrides[get_viewer] = lambda: viewer
+    limiter.reset()
+    client = TestClient(app)
+
+    try:
+        assert client.post(f"{url}/rotated").status_code == 200
+        assert client.post(f"{url}/reopen").json()["severity"] == "critical"
+        reopened_scan = full_scan(db_engine, world)
+        assert reopened_scan.score == baseline() - 25
+
+        # The id the report was showing still works, because reopening kept the same card.
+        second = client.post(f"{url}/rotated")
+        assert second.status_code == 200
+        assert second.json()["id"] == str(card_id)
+
+        scan = full_scan(db_engine, world)
+        listed = client.get("/api/combined-findings").json()
+    finally:
+        limiter.reset()
+        app.dependency_overrides.clear()
+
+    assert scan.score == baseline()
+    assert scan.grade != "D"
+    assert scan.correlation_note is None
+    assert [(card["id"], card["severity"]) for card in listed] == [(str(card_id), "info")]
+    saved = only_card(db_engine)
+    assert saved.rotated_at is not None
+    assert saved.rotated_by == world.owner
 
 
 @pytest.mark.usefixtures("site")

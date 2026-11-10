@@ -302,7 +302,9 @@ export function ScanResults({ scan }: { scan: Scan }) {
       )}
       <ActiveChecksNotice scan={scan} />
       {scan.domain_id && user && (
-        <CombinedFindings scope={{ domainId: scan.domain_id }} />
+        <CombinedFindings
+          scope={{ domainId: scan.domain_id, scanId: scan.id }}
+        />
       )}
 
       {shown > 0 && (

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-10: Combined card wording on reports, and a rotate/reopen test
+
+**Fixed**
+- A combined card on a report whose score already included the leak now says "This scan deducted 25 points", not "Your next full scan deducts". The repository page and reports with no deduction keep the old wording.
+
+**Added**
+- A test for the full rotate, reopen, rotate, full scan sequence.
+
+**Security**
+- A scan id belonging to someone else is treated as no scan id, so it can't be used to probe scans.
+
 ## 2026-11-10: Fix: "Yes, link them" failed in the browser
 
 **Fixed**

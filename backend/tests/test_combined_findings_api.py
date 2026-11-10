@@ -114,6 +114,75 @@ def test_a_confirmed_leak_says_so_and_how_to_fix_it(
     assert any(step["command"] for step in card["history_steps"])
 
 
+def report(world: World, owner: UUID | None = None, note: str | None = "Includes −25") -> Scan:
+    return Scan(
+        owner_id=owner or world.owner,
+        domain_id=world.domain,
+        target_type=TargetType.WEB,
+        target="example.com",
+        mode=ScanMode.FULL,
+        status=ScanJobStatus.DONE,
+        finished_at=utc_now(),
+        correlation_note=note,
+        progress_json=initial_full_progress(),
+    )
+
+
+def test_a_report_that_deducted_says_so(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    leak(db_engine, world)
+    scan = report(world)
+    add(db_engine, scan)
+    sign_in(world.owner)
+
+    note = listed(client, domain_id=world.domain, scan_id=scan.id)[0]["note"]
+
+    assert "This scan deducted 25 points" in note
+    assert "next full scan" not in note
+
+
+def test_a_report_with_no_deduction_still_says_next_scan(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    leak(db_engine, world)
+    scan = report(world, note=None)
+    add(db_engine, scan)
+    sign_in(world.owner)
+
+    note = listed(client, domain_id=world.domain, scan_id=scan.id)[0]["note"]
+
+    assert "Your next full scan deducts" in note
+
+
+def test_a_report_older_than_the_leak_still_says_next_scan(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    scan = report(world)
+    add(db_engine, scan)
+    leak(db_engine, world)
+    sign_in(world.owner)
+
+    note = listed(client, domain_id=world.domain, scan_id=scan.id)[0]["note"]
+
+    assert "Your next full scan deducts" in note
+
+
+def test_someone_elses_report_changes_nothing(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    leak(db_engine, world)
+    other = uuid4()
+    add(db_engine, Profile(id=other))
+    scan = report(world, owner=other)
+    add(db_engine, scan)
+    sign_in(world.owner)
+
+    note = listed(client, domain_id=world.domain, scan_id=scan.id)[0]["note"]
+
+    assert "Your next full scan deducts" in note
+
+
 def test_a_likely_leak_is_hedged(client: TestClient, db_engine: Engine, world: World) -> None:
     leak(db_engine, world, basis=IdentifierBasis.ONLY_PROJECT)
     sign_in(world.owner)

@@ -21,6 +21,11 @@ SCORE_NOTE = (
     "Your next full scan deducts 25 points and caps your grade at D. This is counted once per "
     "project, and adds nothing if that scan already found this key on your site."
 )
+# No grade claim here: when the site also exposed this key, its own finding sets the grade.
+DEDUCTED_NOTE = (
+    "This scan deducted 25 points for this key. It's counted once per project, however many "
+    "commits or repositories it appears in."
+)
 
 
 class HistoryStep(BaseModel):

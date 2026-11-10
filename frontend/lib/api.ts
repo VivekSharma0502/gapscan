@@ -197,7 +197,10 @@ export interface CombinedFinding {
   originals: CombinedOriginal[];
 }
 
-export type CombinedFindingScope = { domainId: string } | { repoId: string };
+// scanId is the report being viewed, so a card can say what that scan deducted.
+export type CombinedFindingScope =
+  | { domainId: string; scanId?: string }
+  | { repoId: string };
 
 export interface VerifyFailure {
   method: VerificationMethod;
@@ -580,7 +583,9 @@ export function listCombinedFindings(
 ): Promise<CombinedFinding[]> {
   const query =
     "domainId" in scope
-      ? `domain_id=${encodeURIComponent(scope.domainId)}`
+      ? `domain_id=${encodeURIComponent(scope.domainId)}${
+          scope.scanId ? `&scan_id=${encodeURIComponent(scope.scanId)}` : ""
+        }`
       : `repo_id=${encodeURIComponent(scope.repoId)}`;
   return request(`/api/combined-findings?${query}`, { signal });
 }
