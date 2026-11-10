@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3c: reopening a key marked as rotated
+
+**Added**
+- A "Reopen this finding" option on a card marked as rotated. It restores the finding and records who reopened it and when. Run `alembic upgrade head` and restart the API.
+
+**Decisions**
+- If a new card is already open for that project, the two merge, so a project never has two open cards.
+- A card whose repo and site no longer match stays rotated instead of reopening, because an open card with no match would be removed by the next refresh.
+
 ## 2026-11-10: Phase 3, step 3c-6: the combined finding card
 
 **Added**

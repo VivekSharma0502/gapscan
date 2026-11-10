@@ -139,7 +139,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - **domain_firebase_projects**: id, domain_id, project_id, first_seen_at, last_seen_at (compared with repos only, never probed)
 - **repo_identifiers**: id, repo_id, kind (supabase_ref|firebase_project|firebase_rtdb|firebase_bucket), value, first_seen_at, last_seen_at
 - **repo_domain_links**: id, owner_id, repo_id, domain_id, state (suggested|confirmed|dismissed), origin (manual|automatic), created_at, updated_at
-- **correlated_findings**: id, owner_id, domain_id, repo_id, kind (supabase_admin|firebase_admin|firebase_config), severity, confidence (confirmed|likely), identifier, first_seen_at, last_seen_at, rotated_at, rotated_by
+- **correlated_findings**: id, owner_id, domain_id, repo_id, kind (supabase_admin|firebase_admin|firebase_config), severity, confidence (confirmed|likely), identifier, first_seen_at, last_seen_at, rotated_at, rotated_by, reopened_at, reopened_by
 - **correlated_finding_members**: correlated_finding_id, finding_id (the originals behind a combined finding)
 - **repos**: id, owner_id, installation_id, github_repo_id, full_name, is_private, first_full_scan_at, needs_full_scan, created_at
 - **github_deliveries**: delivery_id, received_at (webhook replay protection)
@@ -172,6 +172,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 | PATCH | /api/repo-links/{id} | auth, 30/min per IP. Confirms or dismisses a link. Confirming needs a verified domain |
 | DELETE | /api/repo-links/{id} | auth, 30/min per IP. Removes a link. A pair still sharing a backend returns as a suggestion |
 | GET | /api/combined-findings | auth, owner only. Combined findings, optionally for one `domain_id` or `repo_id`, with masked originals |
+| POST | /api/combined-findings/{id}/reopen | auth, 30/min per IP. The owner takes back "rotated". Records who and when, and restores the finding |
 | POST | /api/combined-findings/{id}/rotated | auth, 30/min per IP. The owner says a leaked key was replaced. Records who and when, and drops it to info |
 | POST | /api/github/webhook | verify `X-Hub-Signature-256` |
 | GET | /api/dashboard | auth. Per-domain standing and trend, plus recent scans |

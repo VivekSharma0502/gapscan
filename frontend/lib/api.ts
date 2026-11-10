@@ -184,7 +184,9 @@ export interface CombinedFinding {
   history_steps: HistoryStep[];
   history_docs_url: string | null;
   can_mark_rotated: boolean;
+  can_reopen: boolean;
   rotated_at: string | null;
+  reopened_at: string | null;
   first_seen_at: string;
   last_seen_at: string;
   originals: CombinedOriginal[];
@@ -567,6 +569,12 @@ export function markCombinedFindingRotated(
   id: string,
 ): Promise<CombinedFinding> {
   return request(`/api/combined-findings/${encodeURIComponent(id)}/rotated`, {
+    method: "POST",
+  });
+}
+
+export function reopenCombinedFinding(id: string): Promise<CombinedFinding> {
+  return request(`/api/combined-findings/${encodeURIComponent(id)}/reopen`, {
     method: "POST",
   });
 }

@@ -11,7 +11,7 @@ from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
-from app.api import repo_links
+from app.api import combined_findings, repo_links
 from app.checks.base import Severity
 from app.core.auth import Viewer, get_viewer
 from app.core.rate_limit import limiter
@@ -433,3 +433,143 @@ def test_a_likely_title_is_hedged() -> None:
 
     assert " is leaked" in confirmed
     assert " may be leaked" in likely
+
+
+# --- reopening ---
+
+
+def reopen(client: TestClient, card_id: UUID) -> Any:
+    return client.post(f"{URL}/{card_id}/reopen")
+
+
+def rotated_card(client: TestClient, engine: Engine, world: World, **key: Any) -> UUID:
+    leak(engine, world, **key)
+    sign_in(world.owner)
+    card_id = only_card(engine).id
+    rotate(client, card_id)
+    return card_id
+
+
+def test_reopening_records_who_and_when_and_restores_critical(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    card_id = rotated_card(client, db_engine, world)
+
+    response = reopen(client, card_id)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["severity"] == "critical"
+    assert body["rotated_at"] is None
+    assert body["reopened_at"] is not None
+    assert body["can_mark_rotated"] is True
+    assert body["can_reopen"] is False
+    saved = only_card(db_engine)
+    assert saved.reopened_by == world.owner
+    assert saved.rotated_by is None
+
+
+def test_a_rotated_card_offers_reopening(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    rotated_card(client, db_engine, world)
+
+    assert listed(client)[0]["can_reopen"] is True
+
+
+def test_who_reopened_is_not_sent_to_the_browser(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    card_id = rotated_card(client, db_engine, world)
+
+    body = reopen(client, card_id).json()
+
+    assert "reopened_by" not in body
+    assert "rotated_by" not in body
+
+
+def test_a_reopened_card_can_be_marked_rotated_again(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    card_id = rotated_card(client, db_engine, world)
+    reopen(client, card_id)
+
+    body = rotate(client, card_id).json()
+
+    assert body["severity"] == "info"
+    assert only_card(db_engine).rotated_by == world.owner
+
+
+def test_reopening_an_open_card_changes_nothing(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    leak(db_engine, world)
+    sign_in(world.owner)
+
+    response = reopen(client, only_card(db_engine).id)
+
+    assert response.status_code == 200
+    assert only_card(db_engine).reopened_at is None
+
+
+def test_someone_elses_finding_cannot_be_reopened(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    card_id = rotated_card(client, db_engine, world)
+    person = uuid4()
+    add(db_engine, Profile(id=person))
+    sign_in(person)
+
+    assert reopen(client, card_id).status_code == 404
+    assert only_card(db_engine).rotated_at is not None
+
+
+def test_reopening_joins_a_card_already_open_for_that_project(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    card_id = rotated_card(client, db_engine, world)
+    add(db_engine, repo_key(world, "b"))
+    refresh(db_engine, world)
+    assert len(cards(db_engine)) == 2
+
+    body = reopen(client, card_id).json()
+
+    saved = only_card(db_engine)
+    assert saved.rotated_at is None
+    assert saved.reopened_by == world.owner
+    assert body["id"] == str(saved.id)
+    assert len(body["originals"]) == 2
+
+
+def test_a_card_that_no_longer_matches_stays_rotated(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    card_id = rotated_card(client, db_engine, world)
+    with Session(db_engine) as session:
+        session.get_one(Domain, world.domain).verified_at = None
+        session.commit()
+
+    assert reopen(client, card_id).status_code == 409
+
+    saved = only_card(db_engine)
+    assert saved.rotated_at is not None
+    assert saved.reopened_at is None
+
+
+def test_a_failed_reopen_leaves_the_card_rotated(
+    client: TestClient,
+    db_engine: Engine,
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    card_id = rotated_card(client, db_engine, world)
+
+    def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise SQLAlchemyError("database went away")
+
+    monkeypatch.setattr(combined_findings, "refresh_correlations", boom)
+
+    assert reopen(client, card_id).status_code == 503
+    saved = only_card(db_engine)
+    assert saved.rotated_at is not None
+    assert saved.reopened_at is None

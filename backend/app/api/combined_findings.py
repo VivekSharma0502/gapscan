@@ -11,6 +11,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, col, select
 
 from app.api.repo_links import refresh_saved_change
@@ -37,6 +38,7 @@ from app.repos.combined_guides import (
     combined_title,
     guide_for,
 )
+from app.repos.correlation import refresh_correlations
 
 router = APIRouter(prefix="/api/combined-findings", tags=["correlation"])
 
@@ -76,7 +78,9 @@ class CombinedFindingOut(BaseModel):
     history_steps: tuple[HistoryStep, ...]
     history_docs_url: str | None
     can_mark_rotated: bool
+    can_reopen: bool
     rotated_at: datetime | None
+    reopened_at: datetime | None
     first_seen_at: datetime
     last_seen_at: datetime
     originals: list[OriginalFindingOut]
@@ -133,11 +137,20 @@ def _card_out(
         history_steps=guide.history_steps,
         history_docs_url=HISTORY_DOCS_URL if has_history else None,
         can_mark_rotated=can_be_rotated(card.kind) and card.rotated_at is None,
+        can_reopen=can_be_rotated(card.kind) and card.rotated_at is not None,
         rotated_at=card.rotated_at,
+        reopened_at=card.reopened_at,
         first_seen_at=card.first_seen_at,
         last_seen_at=card.last_seen_at,
         originals=[_original_out(item) for item in originals],
     )
+
+
+def _owned_card(session: Session, card_id: UUID, viewer_id: UUID) -> CorrelatedFinding:
+    card = session.get(CorrelatedFinding, card_id)
+    if card is None or card.owner_id != viewer_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND)
+    return card
 
 
 def _display_order(card: CorrelatedFinding) -> tuple[bool, int, bool]:
@@ -187,9 +200,7 @@ def mark_rotated(
     session: SessionDep,
     viewer: SignedInDep,
 ) -> CombinedFindingOut:
-    card = session.get(CorrelatedFinding, card_id)
-    if card is None or card.owner_id != viewer.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND)
+    card = _owned_card(session, card_id, viewer.id)
     if not can_be_rotated(card.kind):
         raise HTTPException(
             status.HTTP_409_CONFLICT, detail="This finding isn't about a key that can be replaced."
@@ -203,3 +214,72 @@ def mark_rotated(
         session.commit()
         refresh_saved_change(session, viewer.id)
     return _card_out(session, card, _originals_by_card(session, [card.id])[card.id])
+
+
+def _open_twin(session: Session, card: CorrelatedFinding) -> CorrelatedFinding | None:
+    return session.exec(
+        select(CorrelatedFinding).where(
+            CorrelatedFinding.domain_id == card.domain_id,
+            CorrelatedFinding.repo_id == card.repo_id,
+            CorrelatedFinding.kind == card.kind,
+            CorrelatedFinding.identifier == card.identifier,
+            col(CorrelatedFinding.rotated_at).is_(None),
+        )
+    ).first()
+
+
+@router.post("/{card_id}/reopen", response_model=CombinedFindingOut)
+@limiter.limit(MARK_ROTATED_RATE_LIMIT)
+def reopen(
+    request: Request,
+    response: Response,
+    card_id: UUID,
+    session: SessionDep,
+    viewer: SignedInDep,
+) -> CombinedFindingOut:
+    """Take back "I've rotated this key". Only the owner can, and it's recorded."""
+    card = _owned_card(session, card_id, viewer.id)
+    if card.rotated_at is None:
+        return _card_out(session, card, _originals_by_card(session, [card.id])[card.id])
+
+    # A key found since the rotation may already have its own open card, and only one can be
+    # open per project. Its findings join that one, so nothing is shown twice.
+    twin = _open_twin(session, card)
+    if twin is None:
+        card.rotated_at = None
+        card.rotated_by = None
+        reopened = card
+    else:
+        members = session.exec(
+            select(CorrelatedFindingMember).where(
+                CorrelatedFindingMember.correlated_finding_id == card.id
+            )
+        )
+        for member in members:
+            session.delete(member)
+        session.delete(card)
+        reopened = twin
+    reopened.reopened_at = utc_now()
+    reopened.reopened_by = viewer.id
+    reopened_id = reopened.id
+
+    # One transaction, unlike the routes that only record an answer. Whether this finding can
+    # reopen depends on the refresh, so a failure must leave the rotated card as it was.
+    try:
+        session.flush()
+        refresh_correlations(session, viewer.id)
+        session.flush()
+    except SQLAlchemyError as exc:
+        session.rollback()
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, detail="Couldn't reopen this. Please try again."
+        ) from exc
+    current = session.get(CorrelatedFinding, reopened_id)
+    if current is None:
+        session.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="This repository and website no longer match, so it can't be reopened.",
+        )
+    session.commit()
+    return _card_out(session, current, _originals_by_card(session, [current.id])[current.id])

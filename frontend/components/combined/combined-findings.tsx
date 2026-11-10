@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   listCombinedFindings,
   markCombinedFindingRotated,
+  reopenCombinedFinding,
   type CombinedFinding,
   type CombinedFindingScope,
   type HistoryStep,
@@ -169,6 +170,36 @@ function MarkRotated({ finding }: { finding: CombinedFinding }) {
   );
 }
 
+function Reopen({ finding }: { finding: CombinedFinding }) {
+  const queryClient = useQueryClient();
+  const reopen = useMutation({
+    mutationFn: () => reopenCombinedFinding(finding.id),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: [COMBINED_KEY] }),
+  });
+
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={reopen.isPending}
+        onClick={() => reopen.mutate()}
+      >
+        {reopen.isPending && (
+          <LoaderCircle className="animate-spin" aria-hidden />
+        )}
+        Reopen this finding
+      </Button>
+      {reopen.error && (
+        <p role="alert" className="text-destructive">
+          {reopen.error.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function FindingBody({ finding }: { finding: CombinedFinding }) {
   const hasHistory = finding.history_steps.length > 0;
   const rotated = finding.rotated_at !== null;
@@ -230,6 +261,9 @@ function CombinedCard({ finding }: { finding: CombinedFinding }) {
             Owner marked as rotated
           </Badge>
         )}
+        {finding.rotated_at === null && finding.reopened_at && (
+          <Badge variant="outline">Owner reopened</Badge>
+        )}
       </div>
       <h3 className="text-base font-medium tracking-tight text-balance break-words">
         {finding.title}
@@ -252,12 +286,21 @@ function CombinedCard({ finding }: { finding: CombinedFinding }) {
             </dd>
           </>
         )}
+        {finding.rotated_at === null && finding.reopened_at && (
+          <>
+            <dt>Reopened</dt>
+            <dd className="text-foreground">
+              {shortDate(finding.reopened_at)}
+            </dd>
+          </>
+        )}
       </dl>
       {finding.note && (
         <p className="text-pretty text-muted-foreground">{finding.note}</p>
       )}
       <FindingBody finding={finding} />
       {finding.can_mark_rotated && <MarkRotated finding={finding} />}
+      {finding.can_reopen && <Reopen finding={finding} />}
       <Originals finding={finding} />
     </article>
   );

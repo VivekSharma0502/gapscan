@@ -130,6 +130,11 @@ class CorrelatedFinding(SQLModel, table=True):
     rotated_by: UUID | None = Field(
         default=None, sa_column=_reference("profiles", ondelete="SET NULL", nullable=True)
     )
+    # The latest time the owner took a "rotated" answer back.
+    reopened_at: datetime | None = Field(default=None, sa_column=_timestamp(nullable=True))
+    reopened_by: UUID | None = Field(
+        default=None, sa_column=_reference("profiles", ondelete="SET NULL", nullable=True)
+    )
 
 
 class CorrelatedFindingMember(SQLModel, table=True):
