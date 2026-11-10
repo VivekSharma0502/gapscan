@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3c-5: linking repos to websites
+
+**Added**
+- A section on the Repositories page shows suggested links between repositories and verified websites. You can accept them, mark them as not related, undo that, or link a pair yourself.
+- `/api/repo-links` routes for listing, creating, answering and removing links. Each change rebuilds the combined findings straight away.
+
+**Security**
+- Every route checks the signed-in user owns both the repo and the domain, and answers 404 otherwise, so ids can't be probed.
+- Only a verified domain can be linked or confirmed. Marking a pair as not related is always allowed.
+- A link never makes a finding on its own. It can only tie a key with no known project to the site's only Supabase project, and only as "likely".
+
 ## 2026-11-10: Phase 3, step 3c-4: correlation logic and link suggestions
 
 **Added**

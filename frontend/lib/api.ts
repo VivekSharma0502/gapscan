@@ -133,6 +133,21 @@ export interface DomainBackend {
   tables: BackendTable[];
 }
 
+export type RepoLinkState = "suggested" | "confirmed" | "dismissed";
+
+export type RepoLinkAnswer = "confirmed" | "dismissed";
+
+export interface RepoLink {
+  id: string;
+  repo_id: string;
+  repo_full_name: string;
+  domain_id: string;
+  hostname: string;
+  state: RepoLinkState;
+  origin: "manual" | "automatic";
+  updated_at: string;
+}
+
 export interface VerifyFailure {
   method: VerificationMethod;
   code: string;
@@ -459,6 +474,38 @@ export function getRepoFindings(
   signal?: AbortSignal,
 ): Promise<RepoFindings> {
   return request(`/api/repos/${encodeURIComponent(id)}/findings`, { signal });
+}
+
+export function listRepoLinks(signal?: AbortSignal): Promise<RepoLink[]> {
+  return request("/api/repo-links", { signal });
+}
+
+export function createRepoLink(
+  repoId: string,
+  domainId: string,
+): Promise<RepoLink> {
+  return request("/api/repo-links", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo_id: repoId, domain_id: domainId }),
+  });
+}
+
+export function setRepoLinkState(
+  id: string,
+  state: RepoLinkAnswer,
+): Promise<RepoLink> {
+  return request(`/api/repo-links/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ state }),
+  });
+}
+
+export function removeRepoLink(id: string): Promise<void> {
+  return request(`/api/repo-links/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 export function getDashboard(signal?: AbortSignal): Promise<Dashboard> {

@@ -14,6 +14,7 @@ import {
   ScanNowButton,
   SeverityChips,
 } from "@/components/repositories/repo-scan";
+import { RepoLinks } from "@/components/repositories/repo-links";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { getGithubInstallUrl, listRepos, type Repo } from "@/lib/api";
 
@@ -161,6 +162,7 @@ export function RepositoriesView() {
               ))}
             </ul>
           )}
+          {repos.data.length > 0 && <RepoLinks repos={repos.data} />}
         </>
       )}
     </>

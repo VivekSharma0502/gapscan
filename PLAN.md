@@ -105,7 +105,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - [x] Local identifier extraction during repo scans
 - [x] Site side: keep the Firebase project ID, and tie service-key findings to a project
 - [x] Correlation logic and link suggestions
-- [ ] Repo-to-domain link API and screen
+- [x] Repo-to-domain link API and screen
 - [ ] Combined card with rotate and history-purge steps
 - [ ] Scoring
 - Matching happens only within one owner's repos and verified domains, on project identifiers. Keys can't be compared, because no part of one is kept
@@ -167,6 +167,10 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 | GET | /api/repos | auth. Each repo's latest scan and finding counts, no finding details |
 | POST | /api/repos/{id}/scan | auth, 5/min per IP, 10 whole-history scans per repo per hour. Owner only |
 | GET | /api/repos/{id}/findings | auth, owner only. Masked findings by severity, each with how to replace the key |
+| GET | /api/repo-links | auth. The owner's repo-to-site links, with both names |
+| POST | /api/repo-links | auth, 30/min per IP. Links a repo to a verified domain, both the owner's |
+| PATCH | /api/repo-links/{id} | auth, 30/min per IP. Confirms or dismisses a link. Confirming needs a verified domain |
+| DELETE | /api/repo-links/{id} | auth, 30/min per IP. Removes a link. A pair still sharing a backend returns as a suggestion |
 | POST | /api/github/webhook | verify `X-Hub-Signature-256` |
 | GET | /api/dashboard | auth. Per-domain standing and trend, plus recent scans |
 | GET | /api/domains/{id}/backends | auth, owner only. Backends named in the site's code |
