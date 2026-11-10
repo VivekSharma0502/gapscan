@@ -37,6 +37,7 @@ _JWT_RE = re.compile(rf"\beyJ{_JWT_PART}\.eyJ{_JWT_PART}\.{_JWT_PART}")
 _SECRET_KEY_RE = re.compile(r"\bsb_secret_[A-Za-z0-9_-]{20,}")
 _PUBLISHABLE_KEY_RE = re.compile(r"\bsb_publishable_[A-Za-z0-9_-]{20,}")
 _SUPABASE_REF_RE = re.compile(r"[a-z0-9]{20}")
+_FIREBASE_PROJECT_ID_RE = re.compile(r"[a-z][a-z0-9-]{4,28}[a-z0-9]")
 _TABLE_NAME = r"[A-Za-z_][A-Za-z0-9_]{0,62}"
 _TABLE_NAME_RE = re.compile(_TABLE_NAME)
 _FROM_CALL_RE = re.compile(rf"([A-Za-z0-9_$]*)\.from\(\s*{_Q}({_TABLE_NAME}){_Q}\s*\)")
@@ -76,6 +77,10 @@ def _bucket_name(value: str) -> str | None:
     return name if is_valid_bucket(name) else None
 
 
+def is_valid_firebase_project_id(value: str) -> bool:
+    return _FIREBASE_PROJECT_ID_RE.fullmatch(value) is not None
+
+
 def _firebase_backends(text: str) -> set[DiscoveredBackend]:
     found: set[DiscoveredBackend] = set()
     for match in _API_KEY_RE.finditer(text):
@@ -83,16 +88,19 @@ def _firebase_backends(text: str) -> set[DiscoveredBackend]:
             max(0, match.start() - _CONFIG_WINDOW_CHARS) : match.end() + _CONFIG_WINDOW_CHARS
         ]
         # An API key and a project id together mean this really is a Firebase config.
-        if _config_field(window, "projectId") is None:
+        project_value = _config_field(window, "projectId")
+        if project_value is None:
             continue
+        # Security: the site controls this text, so a value of the wrong shape is dropped.
+        project = project_value if is_valid_firebase_project_id(project_value) else None
         database_url = _config_field(window, "databaseURL")
         host = _rtdb_host(database_url) if database_url else None
         if host:
-            found.add(DiscoveredBackend(BaasKind.FIREBASE_RTDB, host))
+            found.add(DiscoveredBackend(BaasKind.FIREBASE_RTDB, host, project))
         bucket_value = _config_field(window, "storageBucket")
         bucket = _bucket_name(bucket_value) if bucket_value else None
         if bucket:
-            found.add(DiscoveredBackend(BaasKind.FIREBASE_STORAGE, bucket))
+            found.add(DiscoveredBackend(BaasKind.FIREBASE_STORAGE, bucket, project))
     return found
 
 
@@ -162,11 +170,20 @@ def find_service_role_refs(text: str) -> set[str]:
     return refs
 
 
+def _only_one(values: set[str]) -> str | None:
+    # With several projects in view, picking one would be a guess.
+    return next(iter(values)) if len(values) == 1 else None
+
+
 def find_exposed_keys(text: str, location: str) -> list[ExposedServiceKey]:
     """Report server-only Supabase keys. The keys themselves are not kept or returned."""
     found: list[ExposedServiceKey] = []
     if any(_is_supabase_service_role(match.group(0)) for match in _JWT_RE.finditer(text)):
-        found.append(ExposedServiceKey(SERVICE_ROLE_MASK, location))
+        found.append(
+            ExposedServiceKey(SERVICE_ROLE_MASK, location, _only_one(find_service_role_refs(text)))
+        )
     if _SECRET_KEY_RE.search(text):
-        found.append(ExposedServiceKey(SECRET_KEY_MASK, location))
+        # An sb_secret_ key doesn't name its project, so the URL beside it has to.
+        urls = {match.group(1) for match in _SUPABASE_URL_RE.finditer(text)}
+        found.append(ExposedServiceKey(SECRET_KEY_MASK, location, _only_one(urls)))
     return found

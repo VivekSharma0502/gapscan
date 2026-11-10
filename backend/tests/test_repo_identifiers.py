@@ -315,6 +315,20 @@ def test_secret_key_with_a_url_beside_it(source: Path) -> None:
 
 
 @requires_tools
+def test_a_key_only_in_history_uses_the_url_from_its_own_commit(source: Path) -> None:
+    # The latest code names a different project, so reading HEAD would give the wrong answer.
+    leaked = f'URL="https://{REF}.supabase.co"\nKEY="{supabase_key()}"\n'
+    commit = commit_file(source, "env.txt", leaked)
+    commit_file(source, "env.txt", f'URL="https://{OTHER_REF}.supabase.co"\n')
+
+    hits, found = read_real(source, [real_hit(commit, "env.txt", SECRET, line=2)])
+
+    assert hits[0].backend_identifier == REF
+    assert hits[0].identifier_basis is IdentifierBasis.SAME_FILE
+    assert {(SB, REF), (SB, OTHER_REF)} <= found
+
+
+@requires_tools
 def test_a_missing_file_is_handled(source: Path) -> None:
     commit = commit_file(source, "readme.txt", "hello\n")
 

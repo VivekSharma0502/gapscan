@@ -22,6 +22,7 @@ from app.checks.baas_discovery import (
     SERVICE_ROLE_MASK,
     find_backends,
     find_exposed_keys,
+    is_valid_firebase_project_id,
 )
 from app.checks.base import (
     BOT_PROTECTION_INFO,
@@ -199,7 +200,7 @@ def test_service_role_key_is_reported_masked() -> None:
 
     found = find_exposed_keys(f'key="{token}"', "/app.js")
 
-    assert found == [ExposedServiceKey(SERVICE_ROLE_MASK, "/app.js")]
+    assert found == [ExposedServiceKey(SERVICE_ROLE_MASK, "/app.js", REF)]
     assert token not in repr(found)
 
 
@@ -308,7 +309,7 @@ def test_finds_a_service_key_and_where_it_is(fake_get: FakeGet) -> None:
     fake_get.default = response(body=service_jwt().encode())
 
     assert discovered(page("/app.js")).exposed_keys == (
-        ExposedServiceKey(SERVICE_ROLE_MASK, "/app.js"),
+        ExposedServiceKey(SERVICE_ROLE_MASK, "/app.js", REF),
     )
 
 
@@ -724,3 +725,108 @@ def test_every_platform_has_an_official_help_link(platform: BotProtection) -> No
     assert info.name
     assert urlparse(info.help_url).scheme == "https"
     assert urlparse(info.help_url).hostname in {"vercel.com", "developers.cloudflare.com"}
+
+
+# --- which project a site's backends and leaked keys belong to ---
+
+OTHER_REF = "tsrqponmlkjihgfedcba"
+
+
+def test_firebase_backends_carry_their_project_id() -> None:
+    backends = find_backends(firebase_config())
+
+    assert {item.firebase_project_id for item in backends} == {"my-app"}
+
+
+def test_a_malformed_project_id_is_dropped_but_the_backends_stay() -> None:
+    backends = find_backends(firebase_config(projectId="Not/Valid"))
+
+    assert RTDB in backends
+    assert {item.firebase_project_id for item in backends} == {None}
+
+
+def test_a_project_id_does_not_change_which_backend_it_is() -> None:
+    labelled = DiscoveredBackend(RTDB.kind, RTDB.identifier, "my-app")
+
+    assert labelled == RTDB
+    assert hash(labelled) == hash(RTDB)
+
+
+@pytest.mark.parametrize(
+    ("value", "valid"),
+    [
+        ("my-app", True),
+        ("a2345678901234567890123456789b", True),
+        ("short", False),
+        ("a23456789012345678901234567890b", False),
+        ("2start", False),
+        ("ends-", False),
+        ("Upper-case", False),
+    ],
+)
+def test_firebase_project_id_shape(value: str, valid: bool) -> None:
+    assert is_valid_firebase_project_id(value) is valid
+
+
+def test_two_service_role_projects_in_one_script_are_not_guessed_between() -> None:
+    other = make_jwt(iss="supabase", ref=OTHER_REF, role="service_role")
+
+    found = find_exposed_keys(f"{service_jwt()} {other}", "/app.js")
+
+    assert found[0].project_ref is None
+
+
+def test_secret_key_takes_the_project_from_a_url_beside_it() -> None:
+    found = find_exposed_keys(f'"https://{REF}.supabase.co" "{secret_key()}"', "/app.js")
+
+    assert found == [ExposedServiceKey(SECRET_KEY_MASK, "/app.js", REF)]
+
+
+def test_secret_key_with_two_urls_beside_it_has_no_project() -> None:
+    text = f'"https://{REF}.supabase.co" "https://{OTHER_REF}.supabase.co" "{secret_key()}"'
+
+    assert find_exposed_keys(text, "/app.js")[0].project_ref is None
+
+
+def service_key_project(*refs: str | None, backends: tuple[str, ...] = ()) -> str | None:
+    keys = tuple(
+        ExposedServiceKey(SERVICE_ROLE_MASK, f"/{i}.js", ref) for i, ref in enumerate(refs)
+    )
+    named = tuple(DiscoveredBackend(BaasKind.SUPABASE, ref) for ref in backends)
+    finding = supabase_service_key(baas(exposed_keys=keys, backends=named))
+    assert finding is not None
+    return finding.backend_identifier
+
+
+def test_service_key_finding_names_its_project() -> None:
+    assert service_key_project(REF) == REF
+
+
+def test_keys_for_one_project_across_scripts_name_it() -> None:
+    assert service_key_project(REF, REF) == REF
+
+
+def test_keys_for_two_projects_name_neither() -> None:
+    assert service_key_project(REF, OTHER_REF) is None
+
+
+def test_a_key_that_says_nothing_uses_the_sites_only_project() -> None:
+    assert service_key_project(None, backends=(REF,)) == REF
+
+
+def test_a_key_that_says_nothing_is_not_guessed_between_two_projects() -> None:
+    assert service_key_project(None, backends=(REF, OTHER_REF)) is None
+
+
+def test_a_key_that_says_nothing_on_a_site_naming_nothing_has_no_project() -> None:
+    assert service_key_project(None) is None
+
+
+def test_a_service_key_finding_never_contains_the_key() -> None:
+    token = service_jwt()
+
+    found = tuple(find_exposed_keys(token, "/app.js"))
+    finding = supabase_service_key(baas(exposed_keys=found))
+
+    assert finding is not None
+    assert token not in finding.model_dump_json()

@@ -103,7 +103,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 **Step 3c: repo and site correlation (combines stored data, no new outbound requests)**
 - [x] Tables and migration
 - [x] Local identifier extraction during repo scans
-- [ ] Site side: keep the Firebase project ID, and tie service-key findings to a project
+- [x] Site side: keep the Firebase project ID, and tie service-key findings to a project
 - [ ] Correlation logic and link suggestions
 - [ ] Repo-to-domain link API and screen
 - [ ] Combined card with rotate and history-purge steps

@@ -19,6 +19,7 @@ from app.checks.baas_discovery import (
     is_official_rtdb_host,
     is_official_supabase_ref,
     is_valid_bucket,
+    is_valid_firebase_project_id,
 )
 from app.checks.base import BaasKind
 from app.models.correlation import RepoIdentifierKind
@@ -53,7 +54,6 @@ _PROJECT_LINE_RE = re.compile(
 _BUCKET_LINE_RE = re.compile(
     r"(?:storageBucket|STORAGE_BUCKET)[\"']?\s*[:=]\s*[\"']?(?:gs://)?([a-z0-9._-]+)"
 )
-_PROJECT_ID_RE = re.compile(r"[a-z][a-z0-9-]{4,28}[a-z0-9]")
 _SERVICE_ACCOUNT_RE = re.compile(r'"type"\s*:\s*"service_account"')
 _FILE_PROJECT_RE = re.compile(r'"project_id"\s*:\s*"([a-z0-9-]+)"')
 
@@ -66,7 +66,7 @@ def parse_grep_output(output: str) -> set[IdentifierPair]:
             if is_official_supabase_ref(match.group(1)):
                 found.add((RepoIdentifierKind.SUPABASE_REF, match.group(1)))
         elif match := _PROJECT_LINE_RE.search(line):
-            if _PROJECT_ID_RE.fullmatch(match.group(1)):
+            if is_valid_firebase_project_id(match.group(1)):
                 found.add((RepoIdentifierKind.FIREBASE_PROJECT, match.group(1)))
         elif match := _BUCKET_LINE_RE.search(line):
             if is_valid_bucket(match.group(1)):
@@ -104,7 +104,7 @@ def _firebase_project_of(text: str) -> tuple[str, IdentifierBasis] | None:
     if _SERVICE_ACCOUNT_RE.search(text) is None:
         return None
     project = _only(_FILE_PROJECT_RE.findall(text))
-    if project is None or _PROJECT_ID_RE.fullmatch(project) is None:
+    if project is None or not is_valid_firebase_project_id(project):
         return None
     return project, IdentifierBasis.SAME_FILE
 

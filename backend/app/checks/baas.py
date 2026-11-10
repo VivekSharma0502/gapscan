@@ -52,6 +52,16 @@ def _coverage(baas: BaasDiscovery) -> str:
     return f"{summary} Skipped: {shown}{more}."
 
 
+def _leaked_project(baas: BaasDiscovery) -> str | None:
+    """The one Supabase project this site's leaked keys belong to, or None if that's unclear."""
+    refs = {key.project_ref for key in baas.exposed_keys}
+    if None in refs:
+        # One key's text didn't say, so fall back on the projects the site names anywhere.
+        refs.discard(None)
+        refs |= {item.identifier for item in baas.backends if item.kind is BaasKind.SUPABASE}
+    return refs.pop() if len(refs) == 1 else None
+
+
 @check("baas.supabase_service_key", Category.BAAS, requires=[Input.BAAS], active=True)
 def supabase_service_key(ctx: ScanContext) -> Finding | None:
     baas = _discovery(ctx)
@@ -65,7 +75,7 @@ def supabase_service_key(ctx: ScanContext) -> Finding | None:
         "baas.supabase_service_key",
         Severity.CRITICAL,
         f"Found a server-only key: {'; '.join(locations)}.",
-    )
+    ).model_copy(update={"backend_identifier": _leaked_project(baas)})
 
 
 def _describe(backend: DiscoveredBackend) -> str:

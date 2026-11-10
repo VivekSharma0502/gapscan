@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3c-3: project identifiers from site scans
+
+**Added**
+- Full scans now keep the Firebase project ID next to each Firebase database and bucket they find.
+- A Supabase server-only key found on a site is tied to its project: from the key's `ref` claim, from a Supabase URL in the same script, or from the only Supabase project the site names. If the site's keys point at more than one project, the finding names none. Restart the worker, then run a full scan to fill these in.
+- A test that a Supabase key found only in git history is tied to the project in its own commit, not the latest code.
+
+**Security**
+- These come from text the site controls, so a Firebase project ID of the wrong shape is dropped. Only identifiers are saved, never any part of a key.
+
 ## 2026-11-10: Phase 3, step 3c-2: project identifiers from repo scans
 
 **Added**

@@ -148,6 +148,8 @@ class Finding(BaseModel):
     title: str
     evidence: str
     fix: Fix
+    # The backend project this finding is about, so a repo finding can be matched to it.
+    backend_identifier: str | None = None
 
 
 class Input(StrEnum):
@@ -180,6 +182,9 @@ class DiscoveredBackend:
     kind: BaasKind
     # A database host, a bucket name or a Supabase project ref. None of them are secrets.
     identifier: str
+    # Left out of comparisons: kind and identifier say which backend this is, and probe
+    # results are looked up by those alone.
+    firebase_project_id: str | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -192,6 +197,8 @@ class ExposedServiceKey:
 
     mask: str
     location: str
+    # Which Supabase project the key unlocks, when the text around it says. Not a secret.
+    project_ref: str | None = None
 
 
 @dataclass(frozen=True)

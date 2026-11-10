@@ -162,6 +162,7 @@ def _save_report(scan_id: UUID, report: ScanReport, total: int, steps: Sequence[
                 severity=finding.severity,
                 title=finding.title,
                 evidence_masked=finding.evidence,
+                backend_identifier=finding.backend_identifier,
             )
             for finding in report.findings
         )
@@ -446,10 +447,15 @@ def _remember_backends(scan_id: UUID, baas: BaasDiscovery | None) -> None:
             if row is not None:
                 # An existing row keeps its confirmation, and only the time it was seen moves.
                 row.last_seen_at = now
+                if backend.firebase_project_id is not None:
+                    row.firebase_project_id = backend.firebase_project_id
             else:
                 session.add(
                     DomainBackend(
-                        domain_id=domain_id, kind=backend.kind, identifier=backend.identifier
+                        domain_id=domain_id,
+                        kind=backend.kind,
+                        identifier=backend.identifier,
+                        firebase_project_id=backend.firebase_project_id,
                     )
                 )
         session.commit()
