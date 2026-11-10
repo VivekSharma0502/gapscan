@@ -81,12 +81,27 @@ def is_valid_firebase_project_id(value: str) -> bool:
     return _FIREBASE_PROJECT_ID_RE.fullmatch(value) is not None
 
 
+def _config_window(text: str, api_key: re.Match[str]) -> str:
+    return text[
+        max(0, api_key.start() - _CONFIG_WINDOW_CHARS) : api_key.end() + _CONFIG_WINDOW_CHARS
+    ]
+
+
+def find_firebase_project_ids(text: str) -> set[str]:
+    """Return the project IDs in Firebase configs, including those with no database or bucket."""
+    found: set[str] = set()
+    for match in _API_KEY_RE.finditer(text):
+        project = _config_field(_config_window(text, match), "projectId")
+        # Security: the site controls this text, so a value of the wrong shape is dropped.
+        if project is not None and is_valid_firebase_project_id(project):
+            found.add(project)
+    return found
+
+
 def _firebase_backends(text: str) -> set[DiscoveredBackend]:
     found: set[DiscoveredBackend] = set()
     for match in _API_KEY_RE.finditer(text):
-        window = text[
-            max(0, match.start() - _CONFIG_WINDOW_CHARS) : match.end() + _CONFIG_WINDOW_CHARS
-        ]
+        window = _config_window(text, match)
         # An API key and a project id together mean this really is a Firebase config.
         project_value = _config_field(window, "projectId")
         if project_value is None:

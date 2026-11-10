@@ -93,3 +93,30 @@ class DomainBackendTable(SQLModel, table=True):
     meant_to_be_public_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
+
+
+class DomainFirebaseProject(SQLModel, table=True):
+    """A Firebase project ID named in a verified site's config.
+
+    Security: its own table, not a backend row. Backends can be confirmed and probed, and a
+    project ID is only ever compared with a repo's, so it can never reach a probe.
+    """
+
+    __tablename__ = "domain_firebase_projects"
+    __table_args__ = (
+        UniqueConstraint(
+            "domain_id", "project_id", name="uq_domain_firebase_projects_domain_project"
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    domain_id: UUID = Field(
+        sa_column=Column(Uuid, ForeignKey("domains.id", ondelete="CASCADE"), nullable=False)
+    )
+    project_id: str = Field(max_length=63)
+    first_seen_at: datetime = Field(
+        default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+    last_seen_at: datetime = Field(
+        default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False)
+    )

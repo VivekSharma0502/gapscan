@@ -104,7 +104,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - [x] Tables and migration
 - [x] Local identifier extraction during repo scans
 - [x] Site side: keep the Firebase project ID, and tie service-key findings to a project
-- [ ] Correlation logic and link suggestions
+- [x] Correlation logic and link suggestions
 - [ ] Repo-to-domain link API and screen
 - [ ] Combined card with rotate and history-purge steps
 - [ ] Scoring
@@ -136,6 +136,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - **github_installations**: id, owner_id, installation_id, account_id, account_login, suspended_at, created_at
 - **domain_backends**: id, domain_id, kind (firebase_rtdb|firebase_storage|supabase), identifier, firebase_project_id, first_seen_at, last_seen_at, confirmed_at (null = never probed)
 - **domain_backend_tables**: id, backend_id, name, access (readable|no_rows|refused), last_seen_at, meant_to_be_public_at (names and states only, never rows)
+- **domain_firebase_projects**: id, domain_id, project_id, first_seen_at, last_seen_at (compared with repos only, never probed)
 - **repo_identifiers**: id, repo_id, kind (supabase_ref|firebase_project|firebase_rtdb|firebase_bucket), value, first_seen_at, last_seen_at
 - **repo_domain_links**: id, owner_id, repo_id, domain_id, state (suggested|confirmed|dismissed), origin (manual|automatic), created_at, updated_at
 - **correlated_findings**: id, owner_id, domain_id, repo_id, kind (supabase_admin|firebase_admin|firebase_config), severity, confidence (confirmed|likely), identifier, first_seen_at, last_seen_at, rotated_at, rotated_by

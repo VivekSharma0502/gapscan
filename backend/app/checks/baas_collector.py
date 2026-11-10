@@ -18,6 +18,7 @@ from app.checks.baas_discovery import (
     find_anon_keys,
     find_backends,
     find_exposed_keys,
+    find_firebase_project_ids,
     find_publishable_keys,
     find_table_names,
 )
@@ -150,6 +151,7 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
     anon = find_anon_keys(homepage)
     publishable = find_publishable_keys(homepage)
     tables = find_table_names(homepage)
+    firebase_projects = find_firebase_project_ids(homepage)
     skipped: list[SkippedScript] = []
     read, failed, total_bytes = 0, 0, 0
     blocked_by = ctx.blocked_by
@@ -200,6 +202,7 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
         anon.update(find_anon_keys(text))
         publishable |= find_publishable_keys(text)
         tables |= find_table_names(text)
+        firebase_projects |= find_firebase_project_ids(text)
 
     ordered = sorted(backends, key=lambda item: (item.kind.value, item.identifier))
     return replace(
@@ -213,6 +216,7 @@ def discover_backends(ctx: ScanContext) -> ScanContext:
             skipped=tuple(skipped),
             supabase_access=_supabase_access(set(ordered[:MAX_BACKENDS]), anon, publishable),
             table_names=tuple(sorted(tables)[:MAX_TABLES]),
+            firebase_project_ids=tuple(sorted(firebase_projects)[:MAX_BACKENDS]),
         ),
         blocked_by=blocked_by,
     )

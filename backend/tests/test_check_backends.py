@@ -644,3 +644,28 @@ def test_backend_checks_stay_out_of_the_score_history(
     sign_in(owner)
 
     assert client.get(f"/api/domains/{domain}/scans").json()["total"] == 0
+
+
+# --- combined findings follow what a scan learned ---
+
+
+@pytest.mark.parametrize(
+    ("mode", "runner"),
+    [(ScanMode.FULL, run_full_scan), (ScanMode.BACKENDS, run_backend_check)],
+)
+def test_a_finished_site_scan_refreshes_combined_findings(
+    db_engine: Engine,
+    backends: FakeBackends,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: ScanMode,
+    runner: Any,
+) -> None:
+    proof(monkeypatch, BLOCKED)
+    refreshed: list[UUID] = []
+    monkeypatch.setattr(tasks, "_refresh_correlations", refreshed.append)
+    owner, domain = seed(db_engine, verified_hours_ago=48)
+    scan_id = add_scan(db_engine, owner, domain, mode)
+
+    runner(str(scan_id))
+
+    assert refreshed == [scan_id]

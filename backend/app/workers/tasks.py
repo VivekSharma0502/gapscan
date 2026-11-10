@@ -40,9 +40,10 @@ from app.checks.runner import (
 )
 from app.core.db import new_session
 from app.models.correlation import RepoIdentifier
-from app.models.domain import Domain, DomainBackend, DomainBackendTable
+from app.models.domain import Domain, DomainBackend, DomainBackendTable, DomainFirebaseProject
 from app.models.github import GithubInstallation, Repo
 from app.models.scan import FindingRecord, IdentifierBasis, Scan, ScanJobStatus, utc_now
+from app.repos.correlation import refresh_correlations
 from app.repos.scanner import REPO_STEPS, RepoScanLimitError, RepoScanResult, scan_repository
 from app.workers.celery_app import celery_app
 
@@ -376,6 +377,20 @@ def _save_repo_report(
         session.commit()
 
 
+def _refresh_correlations(scan_id: UUID) -> None:
+    """Rebuild the combined findings. The scan is already saved, so a failure can't undo it."""
+    try:
+        with new_session() as session:
+            owner_id = session.get_one(Scan, scan_id).owner_id
+            if owner_id is None:
+                return
+            refresh_correlations(session, owner_id)
+            session.commit()
+    except Exception as exc:
+        # Security: only the error type is logged, since a message could echo stored values.
+        logger.warning("could not refresh correlations: %s", type(exc).__name__)
+
+
 @celery_app.task(name="scans.run_repo", time_limit=REPO_TASK_TIME_LIMIT_SECONDS)
 def run_repo_scan(scan_id: str) -> None:
     """Search a linked repo's git history for secrets. Stores masked results only."""
@@ -408,6 +423,7 @@ def run_repo_scan(scan_id: str) -> None:
             on_step=on_step,
         )
         _save_repo_report(job_id, target.repo_id, result, finished)
+        _refresh_correlations(job_id)
     except RepoScanLimitError as exc:
         _update_running(
             job_id,
@@ -427,9 +443,27 @@ def run_repo_scan(scan_id: str) -> None:
         )
 
 
+def _save_firebase_projects(
+    session: Session, domain_id: UUID, project_ids: tuple[str, ...]
+) -> None:
+    known = {
+        row.project_id: row
+        for row in session.exec(
+            select(DomainFirebaseProject).where(DomainFirebaseProject.domain_id == domain_id)
+        )
+    }
+    now = utc_now()
+    for project_id in project_ids:
+        row = known.get(project_id)
+        if row is None:
+            session.add(DomainFirebaseProject(domain_id=domain_id, project_id=project_id))
+        else:
+            row.last_seen_at = now
+
+
 def _remember_backends(scan_id: UUID, baas: BaasDiscovery | None) -> None:
     """Record what the site's code names, so its owner can say which are theirs."""
-    if baas is None or not baas.backends:
+    if baas is None or not (baas.backends or baas.firebase_project_ids):
         return
     with new_session() as session:
         domain_id = session.get_one(Scan, scan_id).domain_id
@@ -458,6 +492,7 @@ def _remember_backends(scan_id: UUID, baas: BaasDiscovery | None) -> None:
                         firebase_project_id=backend.firebase_project_id,
                     )
                 )
+        _save_firebase_projects(session, domain_id, baas.firebase_project_ids)
         session.commit()
 
 
@@ -613,6 +648,7 @@ def run_backend_check(scan_id: str) -> None:
                 verification_note=_recent_proof_note(problem) if problem else None,
             )
         _save_report(job_id, report, total, finished)
+        _refresh_correlations(job_id)
     except Exception as exc:
         # Security: only the error type is logged, since the message could echo a response.
         logger.error("backend check %s failed: %s", scan_id, type(exc).__name__)
@@ -663,6 +699,7 @@ def run_full_scan(scan_id: str) -> None:
         # After a problem there are no probes, so the active checks report skipped, not passed.
         report = run_checks(context, on_step=on_step, allow_active=True)
         _save_report(job_id, report, total, finished)
+        _refresh_correlations(job_id)
     except Exception as exc:
         # Security: only the error type is logged, since the message could echo site content.
         logger.error("scan %s failed: %s", scan_id, type(exc).__name__)

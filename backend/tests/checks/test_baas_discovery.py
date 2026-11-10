@@ -22,6 +22,7 @@ from app.checks.baas_discovery import (
     SERVICE_ROLE_MASK,
     find_backends,
     find_exposed_keys,
+    find_firebase_project_ids,
     is_valid_firebase_project_id,
 )
 from app.checks.base import (
@@ -830,3 +831,34 @@ def test_a_service_key_finding_never_contains_the_key() -> None:
 
     assert finding is not None
     assert token not in finding.model_dump_json()
+
+
+# --- a Firebase project ID on its own ---
+
+BARE_CONFIG = f'{{apiKey:"{API_KEY}",projectId:"my-app"}}'
+
+
+def test_project_id_is_found_in_a_config_with_no_database_or_bucket() -> None:
+    assert find_backends(BARE_CONFIG) == set()
+    assert find_firebase_project_ids(BARE_CONFIG) == {"my-app"}
+
+
+def test_a_malformed_project_id_in_a_config_is_dropped() -> None:
+    assert find_firebase_project_ids(f'{{apiKey:"{API_KEY}",projectId:"Not/Valid"}}') == set()
+
+
+def test_a_project_id_without_a_firebase_api_key_is_not_a_config() -> None:
+    assert find_firebase_project_ids('{projectId:"my-app"}') == set()
+
+
+def test_discovery_keeps_project_ids_from_the_page_and_its_scripts(fake_get: FakeGet) -> None:
+    other = f'{{apiKey:"{API_KEY}",projectId:"second-app"}}'
+    fake_get.default = response(body=other.encode())
+
+    found = discovered(page("/app.js", inline=BARE_CONFIG))
+
+    assert found.firebase_project_ids == ("my-app", "second-app")
+
+
+def test_a_project_id_alone_gives_nothing_to_probe(fake_get: FakeGet) -> None:
+    assert discovered(page(inline=BARE_CONFIG)).backends == ()

@@ -14,7 +14,7 @@ from app.checks.base import (
     ScanContext,
 )
 from app.checks.runner import ScanReport, ScanStatus
-from app.models import DomainBackend, FindingRecord, Scan
+from app.models import DomainBackend, DomainFirebaseProject, FindingRecord, Scan
 from app.models.scan import ScanJobStatus, ScanMode, TargetType, utc_now
 from app.workers.tasks import _remember_backends, _save_report
 from tests.test_correlation_models import REF, World, seed
@@ -120,3 +120,32 @@ def test_a_service_key_finding_is_saved_with_its_project(db_engine: Engine) -> N
         saved = session.exec(select(FindingRecord)).one()
     assert saved.backend_identifier == REF
     assert saved.evidence_masked.count("eyJ****") == 1
+
+
+def saved_projects(engine: Engine) -> list[DomainFirebaseProject]:
+    with Session(engine) as session:
+        return list(session.exec(select(DomainFirebaseProject)))
+
+
+def test_a_site_with_only_a_project_id_saves_it(db_engine: Engine) -> None:
+    scan_id = add_site_scan(db_engine, seed(db_engine))
+
+    _remember_backends(scan_id, discovery(firebase_project_ids=("my-app",)))
+
+    assert [row.project_id for row in saved_projects(db_engine)] == ["my-app"]
+    with Session(db_engine) as session:
+        # Nothing the owner could confirm, so nothing that could be probed.
+        assert list(session.exec(select(DomainBackend))) == []
+
+
+def test_seeing_a_project_id_again_keeps_one_row_and_its_first_seen(db_engine: Engine) -> None:
+    world = seed(db_engine)
+    found = discovery(firebase_project_ids=("my-app",))
+    _remember_backends(add_site_scan(db_engine, world), found)
+    first = saved_projects(db_engine)[0].first_seen_at
+
+    _remember_backends(add_site_scan(db_engine, world), found)
+
+    rows = saved_projects(db_engine)
+    assert len(rows) == 1
+    assert rows[0].first_seen_at == first

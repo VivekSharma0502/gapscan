@@ -231,6 +231,9 @@ class BaasDiscovery:
     # Only what browser code already holds. A server-only key is never placed here.
     supabase_access: tuple[SupabaseAccess, ...] = ()
     table_names: tuple[str, ...] = ()
+    # From Firebase configs, even ones naming no database or bucket. Only ever compared
+    # with a repo's, because a project ID isn't something a probe can be sent to.
+    firebase_project_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

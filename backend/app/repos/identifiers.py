@@ -33,9 +33,9 @@ MAX_FILES_READ = 200
 
 _SERVICE_ROLE_RULE = "supabase-service-role-jwt"
 _SECRET_KEY_RULE = "supabase-secret-key"  # noqa: S105
-_PRIVATE_KEY_RULE = "private-key"
-_SUPABASE_RULES = frozenset({_SERVICE_ROLE_RULE, _SECRET_KEY_RULE})
-_RULES_TO_ATTRIBUTE = _SUPABASE_RULES | {_PRIVATE_KEY_RULE}
+PRIVATE_KEY_RULE = "private-key"
+SUPABASE_RULES = frozenset({_SERVICE_ROLE_RULE, _SECRET_KEY_RULE})
+_RULES_TO_ATTRIBUTE = SUPABASE_RULES | {PRIVATE_KEY_RULE}
 
 # For git grep -o, so only these short matches ever leave git, not the lines around them.
 _QUOTE = "[\"']?"
@@ -125,7 +125,7 @@ def attach_project_identifiers(
         text = read_file(hit)
         if text is None:
             continue
-        is_supabase = hit.rule_id in _SUPABASE_RULES
+        is_supabase = hit.rule_id in SUPABASE_RULES
         project = _supabase_project_of(hit, text) if is_supabase else _firebase_project_of(text)
         if project is None:
             continue
@@ -139,7 +139,7 @@ def attach_project_identifiers(
     attributed: list[SecretHit] = []
     for hit in hits:
         project = resolved.get(hit.fingerprint)
-        if project is None and hit.rule_id in _SUPABASE_RULES and only_ref is not None:
+        if project is None and hit.rule_id in SUPABASE_RULES and only_ref is not None:
             # A guess: the repo names just one project, so the key probably belongs to it.
             project = (only_ref, IdentifierBasis.ONLY_PROJECT)
         if project is None:

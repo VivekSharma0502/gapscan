@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3c-4: correlation logic and link suggestions
+
+**Added**
+- After each repo scan, full scan and backend check, GapScan rebuilds that owner's combined findings and repo-to-site link suggestions from stored data. The screens come in later steps, so nothing visible changes yet. Run `alembic upgrade head` and restart the worker.
+- A leaked Supabase admin key, or a Firebase service account, for a project a verified site uses makes one critical combined finding. It's marked "likely" when the project was only inferred. A Firebase config that matches makes one info finding.
+- Full scans now save the Firebase `projectId` from the config itself, in `domain_firebase_projects`, so a site whose config names no database or bucket can still match a repo.
+
+**Security**
+- Correlation reads and writes the database only, and a test fails if it tries to reach the network or run a program.
+- Matching stays inside one owner's repos and verified domains. A domain that loses verification loses its open combined findings.
+- Project IDs have their own table so they can never be confirmed or probed like a backend.
+
+**Decisions**
+- Originals are never changed. A combined finding only points at them, along with the site's service-key finding from the latest full scan.
+- A key marked as rotated stays as history. A repo finding that rotation didn't cover opens a new combined finding.
+- A dismissed link hides the combined finding. A confirmed link can tie a key with no project to the site's only Supabase project, but only as "likely".
+
 ## 2026-11-10: Phase 3, step 3c-3: project identifiers from site scans
 
 **Added**
