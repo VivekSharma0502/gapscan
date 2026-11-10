@@ -18,6 +18,7 @@ from app.api.scans import (
     lock_target,
     scan_summary,
 )
+from app.checks.baas_probes import PROBED_KINDS
 from app.checks.base import BaasKind
 from app.checks.domains import registrable_domain, shared_platform_suffix
 from app.checks.ownership import (
@@ -42,7 +43,12 @@ from app.models.scan import (
     TargetType,
     utc_now,
 )
-from app.workers.tasks import initial_full_progress, run_full_scan
+from app.workers.tasks import (
+    initial_backend_progress,
+    initial_full_progress,
+    run_backend_check,
+    run_full_scan,
+)
 
 router = APIRouter(prefix="/api/domains", tags=["domains"])
 
@@ -57,6 +63,7 @@ MAX_SCANS_PER_PAGE = 100
 MAX_SCANS_OFFSET = 100_000
 
 _INVALID_HOSTNAME = "Enter a public domain name, like example.com."
+_SCAN_NOUNS = {ScanMode.FULL: "full scans", ScanMode.BACKENDS: "backend checks"}
 
 
 class DomainCreate(BaseModel):
@@ -329,12 +336,14 @@ def list_domain_scans(
     )
 
 
-def _running_scan(session: Session, domain_id: UUID, now: datetime) -> Scan | None:
+def _running_scan(
+    session: Session, domain_id: UUID, now: datetime, mode: ScanMode = ScanMode.FULL
+) -> Scan | None:
     return session.exec(
         select(Scan)
         .where(
             Scan.domain_id == domain_id,
-            Scan.mode == ScanMode.FULL,
+            Scan.mode == mode,
             Scan.status.in_(UNFINISHED_STATUSES),
             Scan.created_at >= now - SCAN_STALE_AFTER,
         )
@@ -342,22 +351,82 @@ def _running_scan(session: Session, domain_id: UUID, now: datetime) -> Scan | No
     ).first()
 
 
-def _enforce_hourly_cap(session: Session, domain_id: UUID, now: datetime) -> None:
+def _enforce_hourly_cap(
+    session: Session, domain_id: UUID, now: datetime, mode: ScanMode = ScanMode.FULL
+) -> None:
     started = session.exec(
         select(func.count())
         .select_from(Scan)
         .where(
             Scan.domain_id == domain_id,
-            Scan.mode == ScanMode.FULL,
+            Scan.mode == mode,
             Scan.created_at >= now - timedelta(hours=1),
         )
     ).one()
     if started >= HOURLY_FULL_SCAN_CAP:
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="This domain has had too many full scans recently. Try again later.",
+            detail=f"This domain has had too many {_SCAN_NOUNS[mode]} recently. Try again later.",
             headers={"Retry-After": "3600"},
         )
+
+
+@router.post(
+    "/{domain_id}/check-backends",
+    response_model=FullScanCreated,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+@limiter.limit(SCAN_RATE_LIMIT)
+def start_backend_check(
+    request: Request,
+    response: Response,
+    domain_id: UUID,
+    session: SessionDep,
+    viewer: SignedInDep,
+) -> FullScanCreated:
+    """Check confirmed backends without scanning the website."""
+    domain = _owned_domain(session, domain_id, viewer.id)
+    # Security: checked here for a clear error. The worker confirms it again before probing.
+    if domain.verified_at is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="Verify this domain before checking its backends."
+        )
+    confirmed = session.exec(
+        select(DomainBackend.id)
+        .where(
+            DomainBackend.domain_id == domain.id,
+            DomainBackend.confirmed_at.is_not(None),
+            DomainBackend.kind.in_(PROBED_KINDS),
+        )
+        .limit(1)
+    ).first()
+    if confirmed is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail="Confirm one of this site's backends first."
+        )
+
+    now = utc_now()
+    lock_target(session, f"backends:{domain.hostname}")
+    running = _running_scan(session, domain.id, now, ScanMode.BACKENDS)
+    if running is not None:
+        response.status_code = status.HTTP_200_OK
+        return FullScanCreated(id=running.id, status=running.status, reused=True)
+
+    _enforce_hourly_cap(session, domain.id, now, ScanMode.BACKENDS)
+    scan = Scan(
+        owner_id=viewer.id,
+        domain_id=domain.id,
+        target_type=TargetType.WEB,
+        target=domain.hostname,
+        mode=ScanMode.BACKENDS,
+        progress_json=initial_backend_progress(),
+    )
+    session.add(scan)
+    scan_id, scan_status = scan.id, scan.status
+    # Committed before queueing, so the worker can't look for a row that doesn't exist yet.
+    session.commit()
+    enqueue_scan(session, scan_id, run_backend_check)
+    return FullScanCreated(id=scan_id, status=scan_status, reused=False)
 
 
 @router.post(

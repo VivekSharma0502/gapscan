@@ -65,7 +65,7 @@ export interface BotProtectionHelp {
 export interface Scan {
   id: string;
   target: string;
-  mode: "quick" | "full";
+  mode: "quick" | "full" | "backends";
   status: ScanJobStatus;
   progress: {
     completed: number;
@@ -81,6 +81,8 @@ export interface Scan {
   incomplete_reason: string | null;
   // Set when a platform's bot protection stopped part of the scan.
   bot_protection: BotProtectionHelp | null;
+  // Set when a backend check relied on an earlier verification.
+  verification_note: string | null;
   findings: Finding[];
   total_findings: number;
   skipped: SkippedCheck[];
@@ -148,7 +150,7 @@ export interface QuickScanCreated {
 export interface ScanSummary {
   id: string;
   target: string;
-  mode: "quick" | "full";
+  mode: "quick" | "full" | "backends";
   status: ScanJobStatus;
   result_status: ResultStatus | null;
   // Null when the site couldn't be read, which can still earn a grade.
@@ -382,6 +384,12 @@ export function confirmBackend(
       body: JSON.stringify({ confirmed }),
     },
   );
+}
+
+export function startBackendCheck(id: string): Promise<FullScanCreated> {
+  return request(`/api/domains/${encodeURIComponent(id)}/check-backends`, {
+    method: "POST",
+  });
 }
 
 export function startFullScan(id: string): Promise<FullScanCreated> {

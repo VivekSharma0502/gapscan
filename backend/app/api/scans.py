@@ -135,6 +135,8 @@ class ScanOut(BaseModel):
     incomplete_reason: str | None
     # Set when a platform's bot protection stopped part of the scan.
     bot_protection: BotProtectionHelp | None
+    # Set when a backend check relied on an earlier verification instead of a fresh one.
+    verification_note: str | None
     findings: list[FindingOut]
     # Every finding, including those cut from a teaser. The count reveals no details.
     total_findings: int
@@ -427,8 +429,8 @@ def get_scan(scan_id: UUID, session: SessionDep, viewer: ViewerDep) -> ScanOut:
 
     full_report = _has_full_access(session, scan, viewer.id if viewer is not None else None)
     # Security: a full scan has no teaser. Even its top findings could name an exposed .env
-    # and its keys, so to anyone but the owner it doesn't exist.
-    if scan.mode is ScanMode.FULL and not full_report:
+    # and its keys, so to anyone but the owner it doesn't exist. Backend checks are the same.
+    if scan.mode is not ScanMode.QUICK and not full_report:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Scan not found.")
 
     records = sorted(
@@ -450,6 +452,7 @@ def get_scan(scan_id: UUID, session: SessionDep, viewer: ViewerDep) -> ScanOut:
         score_label=scan.score_label,
         incomplete_reason=scan.incomplete_reason,
         bot_protection=_bot_protection_help(scan),
+        verification_note=scan.verification_note,
         findings=[_finding_out(record) for record in shown],
         total_findings=len(records),
         skipped=[SkippedCheck(**item) for item in scan.skipped_json] if full_report else [],

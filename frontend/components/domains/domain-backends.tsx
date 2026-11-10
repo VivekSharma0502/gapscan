@@ -2,12 +2,14 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BadgeCheck, LoaderCircle } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   confirmBackend,
   listBackends,
+  startBackendCheck,
   type BaasKind,
   type DomainBackend,
 } from "@/lib/api";
@@ -78,6 +80,34 @@ function BackendRow({
   );
 }
 
+function CheckBackends({ domainId }: { domainId: string }) {
+  const router = useRouter();
+  const check = useMutation({
+    mutationFn: () => startBackendCheck(domainId),
+    onSuccess: (created) => router.push(`/scan/${created.id}`),
+  });
+  // Stays busy after success, until the page has moved on to the report.
+  const busy = check.isPending || check.isSuccess;
+
+  return (
+    <div className="flex flex-col items-start gap-2 pt-2">
+      <Button variant="outline" disabled={busy} onClick={() => check.mutate()}>
+        {busy && <LoaderCircle className="animate-spin" aria-hidden />}
+        {busy ? "Starting…" : "Check backends"}
+      </Button>
+      <p className="text-xs text-pretty text-muted-foreground">
+        Only contacts your confirmed backends, so it can run even when your
+        website&apos;s bot protection is blocking scans.
+      </p>
+      {check.error && (
+        <p role="alert" className="text-sm text-destructive">
+          {check.error.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function DomainBackends({ domainId }: { domainId: string }) {
   const backends = useQuery({
     queryKey: backendsKey(domainId),
@@ -101,7 +131,7 @@ export function DomainBackends({ domainId }: { domainId: string }) {
         A full scan found these in your site&apos;s code. Only confirm the ones
         you own or have permission to test, because code on your site can point
         at someone else&apos;s service. GapScan sends read-only checks to
-        confirmed backends during full scans. It never writes to them and
+        confirmed backends. It never writes to them and
         never stores your data.
       </p>
       <ul className="divide-y">
@@ -113,6 +143,10 @@ export function DomainBackends({ domainId }: { domainId: string }) {
           />
         ))}
       </ul>
+      {/* Supabase has no probes yet, so confirming only that wouldn't give this anything to do. */}
+      {backends.data.some(
+        (backend) => backend.confirmed && backend.kind !== "supabase",
+      ) && <CheckBackends domainId={domainId} />}
     </section>
   );
 }

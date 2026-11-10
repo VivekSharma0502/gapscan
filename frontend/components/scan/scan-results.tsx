@@ -29,7 +29,11 @@ function hasOnlyNotes(scan: Scan): boolean {
 }
 
 function findingsSummary(scan: Scan): string {
-  const checks = scan.mode === "full" ? "The full scan" : "Passive checks";
+  const checks = {
+    full: "The full scan",
+    quick: "Passive checks",
+    backends: "The backend check",
+  }[scan.mode];
   if (scan.total_findings === 0) return `${checks} found no issues.`;
   if (hasOnlyNotes(scan)) {
     return `No issues found · ${counted(scan.total_findings, "note")}`;
@@ -92,8 +96,44 @@ function BotProtectionNotice({ help }: { help: BotProtectionHelp }) {
   );
 }
 
+function BackendCheckSummary({ scan }: { scan: Scan }) {
+  const unanswered = [...new Set(scan.skipped.map((item) => item.reason))];
+
+  return (
+    <section className="flex flex-col gap-3 rounded-xl bg-card p-6 ring-1 ring-foreground/10">
+      <p className="text-sm text-muted-foreground">Backend check for</p>
+      <h1 className="text-2xl font-semibold tracking-tight wrap-anywhere">
+        {scan.target}
+      </h1>
+      <p className="text-sm">{findingsSummary(scan)}</p>
+      {unanswered.map((reason) => (
+        <p key={reason} className="text-sm text-pretty text-muted-foreground">
+          {reason}
+        </p>
+      ))}
+      <p className="text-sm text-pretty text-muted-foreground">
+        This only contacted the backends you confirmed, so it doesn&apos;t
+        change your site&apos;s security score.
+      </p>
+      {scan.verification_note && (
+        <aside
+          role="note"
+          className="flex gap-3 rounded-lg border border-severity-medium/40 bg-severity-medium/10 p-3 text-sm"
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <p className="text-pretty">{scan.verification_note}</p>
+        </aside>
+      )}
+    </section>
+  );
+}
+
 function ScoreSummary({ scan }: { scan: Scan }) {
   const { score, grade, target } = scan;
+
+  if (scan.mode === "backends" && scan.result_status !== "incomplete") {
+    return <BackendCheckSummary scan={scan} />;
+  }
 
   // The API sends no grade when too little could be checked to give an honest one.
   if (grade === null) {

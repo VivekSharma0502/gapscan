@@ -158,7 +158,7 @@ export function ScanView({ id }: { id: string }) {
 
   if (scan.status === "failed") {
     // "Scan again" starts a quick scan, which isn't what someone running a full one wants.
-    return scan.mode === "full" ? (
+    return scan.mode !== "quick" ? (
       <Notice
         title="This scan couldn't finish"
         action={

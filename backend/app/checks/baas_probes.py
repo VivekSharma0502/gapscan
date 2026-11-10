@@ -8,7 +8,7 @@ Security rules for this module:
 """
 
 import json
-from collections.abc import Collection
+from collections.abc import Collection, Iterable
 from dataclasses import replace
 from time import monotonic
 from urllib.parse import quote
@@ -35,6 +35,9 @@ PROBE_BUDGET_SECONDS = 30.0
 
 # A definite "no": refused, locked or not there. Anything else proves nothing either way.
 _DENIED_STATUSES = frozenset({401, 403, 404, 423})
+
+# The kinds of backend these probes can actually test.
+PROBED_KINDS = frozenset({BaasKind.FIREBASE_RTDB, BaasKind.FIREBASE_STORAGE})
 
 
 def _get(url: str, host: str, max_bytes: int) -> SafeResponse | None:
@@ -91,19 +94,11 @@ def _probe_storage(bucket: str) -> StorageProbe:
     return StorageProbe(bucket, listable=None)
 
 
-def probe_backends(ctx: ScanContext, confirmed: Collection[DiscoveredBackend]) -> ScanContext:
-    """Return the context with a result for each backend that may be tested."""
-    if ctx.baas is None:
-        return ctx
-
+def _probe(ctx: ScanContext, backends: Iterable[DiscoveredBackend]) -> ScanContext:
     deadline = monotonic() + PROBE_BUDGET_SECONDS
     rtdb: list[RtdbProbe] = []
     storage: list[StorageProbe] = []
-    # Security: both conditions. Confirmed but gone from the site means the site no longer
-    # uses it, and found but unconfirmed may be someone else's project.
-    for backend in ctx.baas.backends:
-        if backend not in confirmed:
-            continue
+    for backend in backends:
         out_of_time = monotonic() >= deadline
         if backend.kind is BaasKind.FIREBASE_RTDB and is_official_rtdb_host(backend.identifier):
             rtdb.append(
@@ -118,3 +113,23 @@ def probe_backends(ctx: ScanContext, confirmed: Collection[DiscoveredBackend]) -
                 else _probe_storage(backend.identifier)
             )
     return replace(ctx, baas_probes=BaasProbes(rtdb=tuple(rtdb), storage=tuple(storage)))
+
+
+def probe_backends(ctx: ScanContext, confirmed: Collection[DiscoveredBackend]) -> ScanContext:
+    """Probe what this scan found on the site, if its owner has confirmed it."""
+    if ctx.baas is None:
+        return ctx
+    # Security: both conditions. Confirmed but gone from the site means the site no longer
+    # uses it, and found but unconfirmed may be someone else's project.
+    return _probe(ctx, [backend for backend in ctx.baas.backends if backend in confirmed])
+
+
+def probe_confirmed_backends(
+    ctx: ScanContext, confirmed: Collection[DiscoveredBackend]
+) -> ScanContext:
+    """Probe confirmed backends without reading the website at all.
+
+    Security: these were found on the site by an earlier scan and vouched for by its owner.
+    The owner asked for this check directly, so the site's bot protection doesn't apply.
+    """
+    return _probe(ctx, sorted(confirmed, key=lambda item: (item.kind.value, item.identifier)))

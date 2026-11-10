@@ -36,6 +36,8 @@ class TargetType(StrEnum):
 class ScanMode(StrEnum):
     QUICK = "quick"
     FULL = "full"
+    # Contacts only the owner's confirmed backends. Has no score, and is owner-only.
+    BACKENDS = "backends"
 
 
 def utc_now() -> datetime:
@@ -111,6 +113,8 @@ class Scan(SQLModel, table=True):
     blocked_by: BotProtection | None = Field(
         default=None, sa_column=_enum_column(BotProtection, nullable=True)
     )
+    # Set when a backend check relied on an earlier verification instead of a fresh one.
+    verification_note: str | None = None
     skipped_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now, sa_column=_timestamp_column())
     started_at: datetime | None = Field(default=None, sa_column=_timestamp_column(nullable=True))

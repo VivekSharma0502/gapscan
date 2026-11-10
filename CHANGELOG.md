@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-10: Phase 3, step 3b: Check backends
+
+**Added**
+- A "Check backends" button on My domains runs only the probes for confirmed backends, and `POST /api/domains/{id}/check-backends` starts it. Apart from re-proving ownership it sends nothing to the website, so a site behind bot protection can still have its backends checked. It has no score and is owner-only. Run `alembic upgrade head`, and restart the worker.
+- Explicit results when a backend refuses: "Checked: database not publicly readable" and "Checked: storage files can't be listed publicly". They say what wasn't covered, since only the top level of a database is tested.
+
+**Changed**
+- A successful ownership proof during a scan now updates `verified_at`. Before, only the Verify button did, so it could be days out of date.
+
+**Security**
+- If bot protection is all that stops re-verification of a file-verified domain, a verification under 24 hours old can stand in, for backend checks only, and the report says so clearly. Older than that, the check doesn't run.
+- A wrong or missing token still unverifies the domain as before. A domain proven by DNS can't use this at all, because a blocked file says nothing about its DNS record.
+
 ## 2026-11-10: Polite scanning
 
 **Changed**

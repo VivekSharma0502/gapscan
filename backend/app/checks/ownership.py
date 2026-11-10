@@ -87,6 +87,22 @@ class OwnershipResult:
         return None
 
     @property
+    def file_proof_only_blocked(self) -> bool:
+        """True when every file check was stopped by bot protection, and none gave an answer.
+
+        Security: a wrong or missing file alongside a blocked one is a real answer, so it
+        doesn't count as inconclusive.
+        """
+        file_failures = [
+            failure
+            for failure in self.failures + self.legacy_failures
+            if failure.method is VerificationMethod.FILE
+        ]
+        return bool(file_failures) and all(
+            failure.code is FailureCode.FILE_BLOCKED for failure in file_failures
+        )
+
+    @property
     def definitely_gone(self) -> bool:
         # Security for users: every accepted name counts, so a temporary failure on an older
         # record can't strip a domain's verification.

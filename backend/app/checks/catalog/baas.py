@@ -67,6 +67,30 @@ TEXT: dict[str, CheckText] = {
             ),
         ),
     ),
+    "baas.firebase_rtdb_protected": CheckText(
+        title="Checked: database not publicly readable",
+        fix=Fix(
+            what_it_means=(
+                "GapScan asked for the top of your database without signing in, and it was "
+                "refused. This only tests the top level, so rules on specific paths could still "
+                "be more open."
+            ),
+            how_to_fix="Nothing to do. If your rules open up specific paths, review those too.",
+            backend=BackendFix(label="Firebase", docs_url=_RULES_DOCS),
+        ),
+    ),
+    "baas.firebase_storage_protected": CheckText(
+        title="Checked: storage files can't be listed publicly",
+        fix=Fix(
+            what_it_means=(
+                "GapScan asked for a list of this bucket's files without signing in, and it was "
+                "refused. A single file could still be public if your rules allow it and someone "
+                "knows its name."
+            ),
+            how_to_fix="Nothing to do. If some files are meant to be private, review their rules.",
+            backend=BackendFix(label="Firebase", docs_url=_RULES_DOCS),
+        ),
+    ),
     "baas.supabase_service_key": CheckText(
         title="Supabase server-only key is in your website's code",
         fix=Fix(

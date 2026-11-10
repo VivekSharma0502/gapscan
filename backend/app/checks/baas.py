@@ -125,3 +125,29 @@ def firebase_storage_listable(ctx: ScanContext) -> Finding | None:
     if any(probe.listable is None for probe in probes):
         raise SkipCheck(_NO_RELIABLE_ANSWER)
     return None
+
+
+@check("baas.firebase_rtdb_protected", Category.BAAS, requires=[Input.BAAS_PROBES], active=True)
+def firebase_rtdb_protected(ctx: ScanContext) -> Finding | None:
+    """Say so when a database was checked and refused, so a clean result isn't just silence."""
+    hosts = [probe.host for probe in _probes(ctx).rtdb if probe.readable is False]
+    if not hosts:
+        return None
+    return make_finding(
+        "baas.firebase_rtdb_protected",
+        Severity.INFO,
+        f"Refused a read without signing in: {'; '.join(hosts)}.",
+    )
+
+
+@check("baas.firebase_storage_protected", Category.BAAS, requires=[Input.BAAS_PROBES], active=True)
+def firebase_storage_protected(ctx: ScanContext) -> Finding | None:
+    """Say so when a bucket was checked and refused, so a clean result isn't just silence."""
+    buckets = [probe.bucket for probe in _probes(ctx).storage if probe.listable is False]
+    if not buckets:
+        return None
+    return make_finding(
+        "baas.firebase_storage_protected",
+        Severity.INFO,
+        f"Refused a file listing without signing in: {'; '.join(buckets)}.",
+    )

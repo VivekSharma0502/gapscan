@@ -33,7 +33,7 @@ export function ScanRow({
             </span>
           )}
           <Badge variant="outline">
-            {scan.mode === "full" ? "Full" : "Quick"}
+            {{ full: "Full", quick: "Quick", backends: "Backends" }[scan.mode]}
           </Badge>
         </span>
         <span className="flex items-center gap-3">

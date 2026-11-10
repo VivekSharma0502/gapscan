@@ -1,6 +1,7 @@
 """Runs every registered check against a ScanContext and builds the report."""
 
 import logging
+from collections.abc import Collection, Sequence
 from enum import StrEnum
 
 from pydantic import BaseModel
@@ -57,6 +58,8 @@ class ScanReport(BaseModel):
     skipped: list[SkippedCheck]
     # Whose bot protection stopped part of this scan.
     blocked_by: BotProtection | None = None
+    # Set when a backend check relied on an earlier verification instead of a fresh one.
+    verification_note: str | None = None
 
 
 def _missing_input(spec: CheckSpec, ctx: ScanContext) -> Input | None:
@@ -74,14 +77,13 @@ def selected_checks(allow_active: bool = False) -> list[CheckSpec]:
     return [spec for spec in all_checks() if allow_active or not spec.active]
 
 
-def run_checks(
-    ctx: ScanContext, *, on_step: StepCallback | None = None, allow_active: bool = False
-) -> ScanReport:
-    """Run the checks. Security: active checks are opt-in, so none run by accident."""
+def _evaluate(
+    specs: Sequence[CheckSpec], ctx: ScanContext, on_step: StepCallback | None
+) -> tuple[list[Finding], list[SkippedCheck]]:
     findings: list[Finding] = []
     skipped: list[SkippedCheck] = []
 
-    for spec in selected_checks(allow_active):
+    for spec in specs:
         if on_step is not None:
             on_step(spec.check_id)
         missing = _missing_input(spec, ctx)
@@ -109,6 +111,38 @@ def run_checks(
             findings.append(finding)
 
     findings.sort(key=lambda item: (_SEVERITY_ORDER.index(item.severity), item.check_id))
+    return findings, skipped
+
+
+def run_backend_checks(
+    ctx: ScanContext,
+    check_ids: Collection[str],
+    *,
+    on_step: StepCallback | None = None,
+    verification_note: str | None = None,
+) -> ScanReport:
+    """Run only the named checks on backend answers. Never gives a website score."""
+    specs = [spec for spec in all_checks() if spec.check_id in check_ids]
+    findings, skipped = _evaluate(specs, ctx, on_step)
+    return ScanReport(
+        hostname=ctx.hostname,
+        status=ScanStatus.PARTIAL if skipped else ScanStatus.COMPLETE,
+        incomplete_reason=None,
+        score=None,
+        grade=None,
+        grade_cap_reason=None,
+        score_label=None,
+        findings=findings,
+        skipped=skipped,
+        verification_note=verification_note,
+    )
+
+
+def run_checks(
+    ctx: ScanContext, *, on_step: StepCallback | None = None, allow_active: bool = False
+) -> ScanReport:
+    """Run the checks. Security: active checks are opt-in, so none run by accident."""
+    findings, skipped = _evaluate(selected_checks(allow_active), ctx, on_step)
 
     if ctx.homepage is None:
         reason = ctx.skip_reasons.get(Input.HOMEPAGE, _NO_HOMEPAGE_REASON)

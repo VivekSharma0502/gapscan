@@ -81,6 +81,8 @@ EXPECTED_CHECKS = {
     "baas.scripts_unread",
     "baas.firebase_rtdb_public",
     "baas.firebase_storage_listable",
+    "baas.firebase_rtdb_protected",
+    "baas.firebase_storage_protected",
 }
 
 

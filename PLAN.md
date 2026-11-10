@@ -93,6 +93,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - [x] Discovery: Firebase and Supabase backends in the homepage and same-origin scripts, stored per domain. A server-only Supabase key in a script is critical
 - [x] "These are mine" confirmation on the My domains page
 - [x] Firebase RTDB root readable → critical (stores yes/no + key count). Storage listing → high
+- [x] "Check backends" runs only the probes for confirmed backends, so a blocked website can't stop them. A refused probe is reported as an explicit "Checked" line
 - [ ] Supabase tables named by `.from()` in scripts, checked with HEAD. Readable → high, with a per-table "meant to be public" option that makes it info and stops it affecting the grade
 - [ ] Plain-language fixes with rule snippets
 - Nothing is sent to a backend until the domain's owner confirms it's theirs, because a verified site's code can name someone else's project
@@ -123,7 +124,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 - **domain_backends**: id, domain_id, kind (firebase_rtdb|firebase_storage|supabase), identifier, first_seen_at, last_seen_at, confirmed_at (null = never probed)
 - **repos**: id, owner_id, installation_id, github_repo_id, full_name, is_private, first_full_scan_at, needs_full_scan, created_at
 - **github_deliveries**: delivery_id, received_at (webhook replay protection)
-- **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, before_sha, after_sha, target, mode (quick|full), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, grade_cap_reason, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
+- **scans**: id, owner_id (nullable = anonymous), target_type (web|repo), domain_id, repo_id, before_sha, after_sha, target, mode (quick|full|backends), status (queued|running|done|failed), progress_json, result_status (complete|partial|incomplete), score, grade, grade_cap_reason, score_label, incomplete_reason, skipped_json, created_at, started_at, finished_at
 - **findings**: id, scan_id, check_id, category, severity (critical|high|medium|low|info), title, evidence_masked, location, linked_finding_id, repo_id, rule_id, file_path, line, commit_sha, fingerprint, created_at (first seen, for repo findings)
 - **scan_claims**: id, scan_id, token_hash, created_at, claimed_by, claimed_at (one per anonymous request, redeemed after signup. A redeemed row grants that user the full report, since scans within the reuse window are shared)
 - **notification_settings**: owner_id, email_enabled, telegram_chat_id, min_severity
@@ -140,6 +141,7 @@ PLAN.md  CLAUDE.md  README.md  CHANGELOG.md  .env.example
 | POST | /api/domains | returns the token and both verification methods |
 | DELETE | /api/domains/{id} | auth. Past scans stay readable by their owner |
 | POST | /api/domains/{id}/verify | DNS TXT lookup and file fetch, with a reason for each failure |
+| POST | /api/domains/{id}/check-backends | auth, verified only, 5/min per IP, 10 per domain per hour. Probes confirmed backends only |
 | POST | /api/domains/{id}/scan | full scan, verified only |
 | POST | /api/github/install-url | auth. Returns the GitHub install link with a one-time state |
 | POST | /api/github/installations/link | auth. Links an installation only if the state is the user's own and GitHub says their account owns it |
@@ -163,6 +165,7 @@ Grade caps, on top of the points (the numeric score stays as calculated): no HTT
 ## Security rules (non-negotiable)
 - **SSRF guard** on every outbound request: resolve DNS, block private/loopback/link-local/reserved/multicast IPs (v4 + v6), re-check after each redirect, max 5 redirects, timeouts, response size cap
 - The repo scanner's `git clone` can't use the guard, so it is the one exception: `https://github.com/<owner>/<name>.git` only, redirects off, name from a GitHub API response
+- If bot protection is all that stops re-verification of a file-verified domain, a successful verification under 24 hours old can stand in, for backend checks only, and the report says so. A wrong or missing token still unverifies
 - **Ownership** required for active + BaaS checks (DNS TXT for domains, GitHub App install for repos)
 - **Rate limiting** (slowapi) — strict on `/api/scans/quick`
 - Never store or log full secrets; mask everything

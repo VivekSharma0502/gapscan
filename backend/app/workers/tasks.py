@@ -3,6 +3,7 @@
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -11,7 +12,7 @@ from sqlmodel import select, update
 
 from app.checks.active_collector import attach_probes, without_probes
 from app.checks.baas_collector import discover_backends
-from app.checks.baas_probes import probe_backends
+from app.checks.baas_probes import probe_backends, probe_confirmed_backends
 from app.checks.base import (
     BaasDiscovery,
     BotProtection,
@@ -22,8 +23,14 @@ from app.checks.base import (
     bot_protection_label,
 )
 from app.checks.collector import COLLECT_STEPS, collect_context
-from app.checks.ownership import prove_ownership
-from app.checks.runner import ScanReport, ScanStatus, run_checks, selected_checks
+from app.checks.ownership import VerificationMethod, prove_ownership
+from app.checks.runner import (
+    ScanReport,
+    ScanStatus,
+    run_backend_checks,
+    run_checks,
+    selected_checks,
+)
 from app.core.db import new_session
 from app.models.domain import Domain, DomainBackend
 from app.models.github import GithubInstallation, Repo
@@ -37,6 +44,16 @@ OWNERSHIP_STEP = "ownership_check"
 PROBE_STEP = "active_probes"
 BAAS_STEP = "baas_discovery"
 BAAS_PROBE_STEP = "baas_probes"
+
+# Security: how long a past verification can stand in when bot protection blocks a new
+# one, and only for backend checks. Short, because a domain can change hands.
+RECENT_PROOF_LIMIT = timedelta(hours=24)
+BACKEND_CHECK_IDS = (
+    "baas.firebase_rtdb_public",
+    "baas.firebase_storage_listable",
+    "baas.firebase_rtdb_protected",
+    "baas.firebase_storage_protected",
+)
 
 _NOT_VERIFIED_REASON = "This domain isn't verified, so these checks did not run."
 _PROOF_GONE_REASON = (
@@ -120,6 +137,7 @@ def _save_report(scan_id: UUID, report: ScanReport, total: int, steps: Sequence[
                 score_label=report.score_label,
                 incomplete_reason=report.incomplete_reason,
                 blocked_by=report.blocked_by,
+                verification_note=report.verification_note,
                 skipped_json=[item.model_dump() for item in report.skipped],
                 progress_json=_progress(total, total, None, steps),
                 finished_at=utc_now(),
@@ -146,6 +164,15 @@ def _save_report(scan_id: UUID, report: ScanReport, total: int, steps: Sequence[
 class _OwnershipProblem:
     reason: str
     blocked_by: BotProtection | None = None
+    # How long ago ownership was last proven. Set only when bot protection is all that
+    # stopped a fresh proof, so a wrong or missing token can never use it.
+    proof_age: timedelta | None = None
+
+
+def _age_since(moment: datetime) -> timedelta:
+    # SQLite, used in tests, hands back timestamps without their timezone.
+    aware = moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+    return max(utc_now() - aware, timedelta(0))
 
 
 def _ownership_problem(scan_id: UUID) -> _OwnershipProblem | None:
@@ -166,15 +193,28 @@ def _ownership_problem(scan_id: UUID) -> _OwnershipProblem | None:
             return _OwnershipProblem(_NOT_VERIFIED_REASON)
         domain_id, hostname, token = domain.id, domain.hostname, domain.verify_token
         accept_legacy = domain.accepts_legacy_verify_names
+        last_proven_at, proven_by = domain.verified_at, domain.verified_method
 
     result = prove_ownership(hostname, token, accept_legacy=accept_legacy)
     if result.proven:
+        # This is the last successful verification that the 24-hour rule relies on.
+        with new_session() as session:
+            session.exec(
+                update(Domain)
+                .where(Domain.id == domain_id)
+                .values(verified_at=utc_now(), verified_method=result.method)
+            )
+            session.commit()
         return None
     if result.blocked_by is not None:
+        # Security: a domain proven by DNS can't lean on a blocked file. Its own proof gave a
+        # real answer, and the file says nothing about it.
+        inconclusive = proven_by == VerificationMethod.FILE and result.file_proof_only_blocked
         return _OwnershipProblem(
             f"{bot_protection_label(result.blocked_by)} blocked our request for your "
             "verification file, so these checks did not run. Your domain is still verified.",
             result.blocked_by,
+            _age_since(last_proven_at) if inconclusive else None,
         )
     if not result.definitely_gone:
         return _OwnershipProblem(_PROOF_UNKNOWN_REASON)
@@ -380,6 +420,92 @@ def _confirmed_backends(scan_id: UUID) -> set[DiscoveredBackend]:
             )
         )
         return {DiscoveredBackend(row.kind, row.identifier) for row in rows}
+
+
+def initial_backend_progress() -> dict[str, Any]:
+    return _progress(0, 2 + len(BACKEND_CHECK_IDS), None)
+
+
+def _hours_ago(age: timedelta) -> str:
+    hours = int(age.total_seconds() // 3600)
+    if hours < 1:
+        return "less than an hour ago"
+    return "1 hour ago" if hours == 1 else f"{hours} hours ago"
+
+
+def _may_use_recent_proof(problem: _OwnershipProblem) -> bool:
+    return problem.proof_age is not None and problem.proof_age < RECENT_PROOF_LIMIT
+
+
+def _recent_proof_note(problem: _OwnershipProblem) -> str:
+    assert problem.blocked_by is not None and problem.proof_age is not None  # noqa: S101
+    return (
+        f"{bot_protection_label(problem.blocked_by)} blocked our request for your verification "
+        f"file, so we couldn't check it again. Your last successful verification was "
+        f"{_hours_ago(problem.proof_age)}, within the 24-hour limit, so only the backend checks "
+        "ran."
+    )
+
+
+def _refused_backend_check(target: str, problem: _OwnershipProblem) -> ScanReport:
+    reason = problem.reason
+    if problem.proof_age is not None:
+        assert problem.blocked_by is not None  # noqa: S101
+        reason = (
+            f"{bot_protection_label(problem.blocked_by)} blocked our request for your "
+            "verification file, and your last successful verification is more than 24 hours "
+            "old, so the backend checks did not run. Your domain is still verified."
+        )
+    return ScanReport(
+        hostname=target,
+        status=ScanStatus.INCOMPLETE,
+        incomplete_reason=reason,
+        score=None,
+        grade=None,
+        grade_cap_reason=None,
+        score_label=None,
+        findings=[],
+        skipped=[],
+        blocked_by=problem.blocked_by,
+    )
+
+
+@celery_app.task(name="scans.run_backends")
+def run_backend_check(scan_id: str) -> None:
+    """Check confirmed backends only. Apart from re-proving ownership, the site isn't contacted."""
+    job_id = UUID(scan_id)
+    target = _claim_scan(job_id)
+    if target is None:
+        return
+
+    total = initial_backend_progress()["total"]
+    finished: list[str] = []
+
+    def on_step(step: str) -> None:
+        _update_running(job_id, progress_json=_progress(len(finished), total, step, finished))
+        finished.append(step)
+
+    try:
+        on_step(OWNERSHIP_STEP)
+        problem = _ownership_problem(job_id)
+        if problem is not None and not _may_use_recent_proof(problem):
+            report = _refused_backend_check(target, problem)
+        else:
+            on_step(BAAS_PROBE_STEP)
+            context = probe_confirmed_backends(
+                ScanContext(hostname=target), _confirmed_backends(job_id)
+            )
+            report = run_backend_checks(
+                context,
+                BACKEND_CHECK_IDS,
+                on_step=on_step,
+                verification_note=_recent_proof_note(problem) if problem else None,
+            )
+        _save_report(job_id, report, total, finished)
+    except Exception as exc:
+        # Security: only the error type is logged, since the message could echo a response.
+        logger.error("backend check %s failed: %s", scan_id, type(exc).__name__)
+        _update_running(job_id, status=ScanJobStatus.FAILED, finished_at=utc_now())
 
 
 @celery_app.task(name="scans.run_full")

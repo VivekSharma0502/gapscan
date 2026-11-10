@@ -49,6 +49,8 @@ const STEP_LABELS: Record<string, string> = {
   "baas.scripts_unread": "Scripts that couldn't be read",
   "baas.firebase_rtdb_public": "Firebase database rules",
   "baas.firebase_storage_listable": "Firebase storage rules",
+  "baas.firebase_rtdb_protected": "Firebase database access",
+  "baas.firebase_storage_protected": "Firebase storage access",
 
   "exposure.env_file": "Environment files",
   "exposure.git_directory": "Git folder",
