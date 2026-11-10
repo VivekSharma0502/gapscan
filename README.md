@@ -2,17 +2,11 @@
 
 Security checks for websites and GitHub repositories, built for students, freelancers and small agencies. GapScan finds the gaps that matter on apps shipped with Firebase, Supabase, Vercel or Netlify, and explains each fix in plain language.
 
+![A GapScan report showing an A+ grade with a score of 98 out of 100](docs/screenshots/score-a-plus.png)
+
 GapScan is open source and self-hostable. Run it yourself by following [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md).
 
 > **Scan only what you own or have written permission to test.** See [SECURITY.md](SECURITY.md).
-
-## Screenshots
-
-> _Screenshot placeholder: a scan report with its grade._
-
-> _Screenshot placeholder: a combined finding across a repository and a website._
-
-> _Screenshot placeholder: the dashboard._
 
 ## Features
 
@@ -31,10 +25,22 @@ GapScan is open source and self-hostable. Run it yourself by following [docs/SEL
 - With the owner's confirmation, read-only probes check for a readable Firebase Realtime Database, a listable Storage bucket, and readable Supabase tables.
 - A table can be marked as meant to be public, so it stops affecting the grade.
 
+![Report findings confirming that backends were tested read-only](docs/screenshots/backends-tested.png)
+
+_Confirmed backends are tested with read-only requests, and the report says what was checked._
+
 **Combined findings**
 - When a key leaked in your repository belongs to a backend your site uses, the two become one finding, with steps to replace the key and clean up git history.
 - Matching stays inside one owner's repositories and verified domains, and compares project identifiers only.
 - Owners can mark a key as rotated, and reopen it if that was a mistake.
+
+![The Repositories page asking whether a repository powers a website](docs/screenshots/repo-website-link.png)
+
+_GapScan suggests which repository powers which website, and you confirm it._
+
+![A critical combined finding with numbered steps for replacing a leaked Supabase key](docs/screenshots/combined-card-fix-steps.png)
+
+_Each combined finding has provider-specific steps for replacing the key._
 
 **Grades**
 
@@ -50,6 +56,10 @@ Scores start at 100. Each finding deducts points: critical 25, high 15, medium 7
 | F | below 40 |
 
 No HTTPS, or an expired or untrusted certificate, caps the grade at F. Any other critical finding caps it at D. A confirmed admin key leaked in a linked repository costs 25 points once per project and caps the grade at D.
+
+![A report graded D, 73 out of 100, with a critical combined finding](docs/screenshots/combined-critical-grade-d.png)
+
+_A confirmed leaked admin key costs 25 points and caps the grade at D._
 
 ## Tech stack
 
