@@ -12,11 +12,13 @@ LIKELY_NOTE = (
     "GapScan worked out the project indirectly, so this key may belong to something else. "
     "Treat it as real until you've checked. A likely match never affects your score."
 )
-ROTATED_NOTE = (
+_ROTATED_ANSWER = (
     "You told GapScan this key was replaced. GapScan can't check that itself, so it's "
     "recorded as your answer. If a different leak of a key for this project appears, it will "
-    "be raised again. It stops affecting your score from your next full scan."
+    "be raised again."
 )
+ROTATED_NOTE = f"{_ROTATED_ANSWER} It stops affecting your score from your next full scan."
+ROTATED_NOT_COUNTED_NOTE = f"{_ROTATED_ANSWER} This scan didn't count it against your score."
 SCORE_NOTE = (
     "Your next full scan deducts 25 points and caps your grade at D. This is counted once per "
     "project, and adds nothing if that scan already found this key on your site."

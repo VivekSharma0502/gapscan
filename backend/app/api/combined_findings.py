@@ -28,11 +28,12 @@ from app.models.correlation import (
 )
 from app.models.domain import Domain
 from app.models.github import Repo
-from app.models.scan import FindingRecord, Scan, utc_now
+from app.models.scan import FindingRecord, Scan, ScanMode, utc_now
 from app.repos.combined_guides import (
     DEDUCTED_NOTE,
     HISTORY_DOCS_URL,
     LIKELY_NOTE,
+    ROTATED_NOT_COUNTED_NOTE,
     ROTATED_NOTE,
     SCORE_NOTE,
     HistoryStep,
@@ -114,7 +115,7 @@ def _originals_by_card(session: Session, card_ids: list[UUID]) -> dict[UUID, lis
 
 def _note(card: CorrelatedFinding, report: Scan | None) -> str | None:
     if card.rotated_at is not None:
-        return ROTATED_NOTE
+        return ROTATED_NOT_COUNTED_NOTE if _left_out_of(report, card) else ROTATED_NOTE
     if card.confidence is MatchConfidence.LIKELY:
         return LIKELY_NOTE
     if not can_be_rotated(card.kind):
@@ -123,24 +124,39 @@ def _note(card: CorrelatedFinding, report: Scan | None) -> str | None:
 
 
 def _deducted_on(report: Scan | None, card: CorrelatedFinding) -> bool:
+    # A scan only saves a note about what it counted, so that note is the evidence.
     return (
         report is not None
+        and report.correlation_note is not None
         and report.domain_id == card.domain_id
         and report.finished_at is not None
         and report.finished_at >= card.first_seen_at
     )
 
 
-def _report_with_deduction(session: Session, scan_id: UUID | None, viewer_id: UUID) -> Scan | None:
-    """The report being viewed, if leaked keys changed its score.
+def _left_out_of(report: Scan | None, card: CorrelatedFinding) -> bool:
+    # Compared with when the scan was created, because a scan already running at the rotation
+    # may have read the key while it still counted.
+    return (
+        report is not None
+        and card.rotated_at is not None
+        and report.mode is ScanMode.FULL
+        and report.score is not None
+        and report.domain_id == card.domain_id
+        and report.created_at >= card.rotated_at
+    )
 
-    A scan only saves a note about what it counted, so that note is the evidence. Security:
-    someone else's scan id gets the same answer as no id, so this can't be used to probe scans.
+
+def _viewed_report(session: Session, scan_id: UUID | None, viewer_id: UUID) -> Scan | None:
+    """The report being viewed.
+
+    Security: someone else's scan id gets the same answer as no id, so this can't be used to
+    probe scans.
     """
     if scan_id is None:
         return None
     scan = session.get(Scan, scan_id)
-    if scan is None or scan.owner_id != viewer_id or scan.correlation_note is None:
+    if scan is None or scan.owner_id != viewer_id:
         return None
     return scan
 
@@ -226,7 +242,7 @@ def list_combined_findings(
         key=_display_order,
     )
     originals = _originals_by_card(session, [card.id for card in cards])
-    report = _report_with_deduction(session, scan_id, viewer.id)
+    report = _viewed_report(session, scan_id, viewer.id)
     return [_card_out(session, card, originals[card.id], report) for card in cards]
 
 

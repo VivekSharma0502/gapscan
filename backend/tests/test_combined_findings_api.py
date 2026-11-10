@@ -114,7 +114,12 @@ def test_a_confirmed_leak_says_so_and_how_to_fix_it(
     assert any(step["command"] for step in card["history_steps"])
 
 
-def report(world: World, owner: UUID | None = None, note: str | None = "Includes −25") -> Scan:
+def report(
+    world: World,
+    owner: UUID | None = None,
+    note: str | None = "Includes −25",
+    **fields: Any,
+) -> Scan:
     return Scan(
         owner_id=owner or world.owner,
         domain_id=world.domain,
@@ -125,7 +130,91 @@ def report(world: World, owner: UUID | None = None, note: str | None = "Includes
         finished_at=utc_now(),
         correlation_note=note,
         progress_json=initial_full_progress(),
+        **fields,
     )
+
+
+NOT_COUNTED = "This scan didn't count it against your score."
+STILL_AHEAD = "It stops affecting your score from your next full scan."
+
+
+def rotated_note(client: TestClient, engine: Engine, world: World, scan: Scan) -> str:
+    add(engine, scan)
+    return listed(client, domain_id=world.domain, scan_id=scan.id)[0]["note"]
+
+
+def test_a_report_after_the_rotation_says_it_was_not_counted(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    rotated_card(client, db_engine, world)
+
+    note = rotated_note(client, db_engine, world, report(world, note=None, score=98))
+
+    assert NOT_COUNTED in note
+    assert "next full scan" not in note
+
+
+def test_a_report_older_than_the_rotation_keeps_the_future_wording(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    leak(db_engine, world)
+    sign_in(world.owner)
+    scan = report(world, score=73)
+    add(db_engine, scan)
+    rotate(client, only_card(db_engine).id)
+
+    note = listed(client, domain_id=world.domain, scan_id=scan.id)[0]["note"]
+
+    assert STILL_AHEAD in note
+    assert NOT_COUNTED not in note
+
+
+def test_a_scan_already_running_at_the_rotation_keeps_the_future_wording(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    leak(db_engine, world)
+    sign_in(world.owner)
+    # Created before the rotation and finished after it, so it may have counted the key.
+    scan = report(world, score=73)
+    add(db_engine, scan)
+    rotate(client, only_card(db_engine).id)
+    with Session(db_engine) as session:
+        session.get_one(Scan, scan.id).finished_at = utc_now()
+        session.commit()
+
+    note = listed(client, domain_id=world.domain, scan_id=scan.id)[0]["note"]
+
+    assert STILL_AHEAD in note
+
+
+def test_the_repository_page_keeps_the_future_wording(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    rotated_card(client, db_engine, world)
+
+    assert STILL_AHEAD in listed(client, repo_id=world.repo)[0]["note"]
+
+
+def test_a_report_with_no_score_keeps_the_future_wording(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    rotated_card(client, db_engine, world)
+
+    note = rotated_note(client, db_engine, world, report(world, note=None))
+
+    assert STILL_AHEAD in note
+
+
+def test_someone_elses_report_keeps_the_future_wording(
+    client: TestClient, db_engine: Engine, world: World
+) -> None:
+    rotated_card(client, db_engine, world)
+    other = uuid4()
+    add(db_engine, Profile(id=other))
+
+    note = rotated_note(client, db_engine, world, report(world, owner=other, score=98))
+
+    assert STILL_AHEAD in note
 
 
 def test_a_report_that_deducted_says_so(

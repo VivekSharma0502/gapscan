@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-10: Rotated card wording on reports
+
+**Fixed**
+- A card marked as rotated now says "This scan didn't count it against your score" on a full report from a scan started after the rotation. The repository page and reports older than the rotation still say it stops affecting the score from the next full scan. Restart the API.
+
+**Decisions**
+- A scan already running when the key was marked as rotated keeps the future wording, because it may have read the key while it still counted.
+
 ## 2026-11-10: Combined card wording on reports, and a rotate/reopen test
 
 **Fixed**
