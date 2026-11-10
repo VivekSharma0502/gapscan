@@ -10,6 +10,7 @@
 - The README now describes the project for new visitors: features, stack, architecture, security design and a quick start. Detailed setup moved to `docs/SELF_HOSTING.md`.
 - Added `docs/SELF_HOSTING.md`, a step-by-step guide for Windows, macOS and Linux with troubleshooting.
 - Added `SECURITY.md` for reporting vulnerabilities and responsible use, and `CONTRIBUTING.md`.
+- The project is licensed under the GNU AGPL v3.0.
 
 **Decisions**
 - The `scankit-verify` DNS and file names stay accepted, because removing them would unverify domains set up that way.
