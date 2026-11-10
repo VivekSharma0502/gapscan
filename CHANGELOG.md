@@ -7,6 +7,7 @@
 - An existing local database keeps its old name, because Postgres only reads those settings on first start. To keep it, set `DATABASE_URL` in `.env` to the old `scankit` values.
 - The scanner's default User-Agent now links to the public repository. Anyone self-hosting should set `SCANNER_USER_AGENT` to a page of their own.
 - `.env.example` now covers every backend setting, and the frontend's settings moved to a new `frontend/.env.example`.
+- The README now describes the project for new visitors: features, stack, architecture, security design and a quick start. Detailed setup moved to `docs/SELF_HOSTING.md`.
 
 **Decisions**
 - The `scankit-verify` DNS and file names stay accepted, because removing them would unverify domains set up that way.

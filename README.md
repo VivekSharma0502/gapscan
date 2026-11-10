@@ -1,151 +1,146 @@
 # GapScan
 
-Security checks for websites and GitHub repos, built for students, freelancers and small agencies.
+Security checks for websites and GitHub repositories, built for students, freelancers and small agencies. GapScan finds the gaps that matter on apps shipped with Firebase, Supabase, Vercel or Netlify, and explains each fix in plain language.
 
-See `PLAN.md` for scope and roadmap, and `CHANGELOG.md` for history.
+GapScan is open source and self-hostable. Run it yourself by following [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md).
 
-The product name is set once, in `product.json`. The backend and frontend both read it, and both need the file when deployed. Supabase's sign-in emails are edited in the Supabase dashboard, so a rename needs a manual change there too.
+> **Scan only what you own or have written permission to test.** See [SECURITY.md](SECURITY.md).
 
-## Layout
+## Screenshots
 
-| Path | What |
+> _Screenshot placeholder: a scan report with its grade._
+
+> _Screenshot placeholder: a combined finding across a repository and a website._
+
+> _Screenshot placeholder: the dashboard._
+
+## Features
+
+**Website scan**
+- A quick scan works on any domain and is passive only: TLS and certificates, security headers, cookies, DNS and email records (SPF, DMARC, CAA), and WordPress version detection.
+- A full scan needs a verified domain and adds active checks: exposed `.env` and `.git` files, backups, source maps and directory listings.
+- Each finding explains what it means and how to fix it, with snippets for Vercel, Netlify, nginx and Cloudflare where they apply.
+
+**Repository secret scanning**
+- A GitHub App and [gitleaks](https://github.com/gitleaks/gitleaks) check a repository's whole git history.
+- Each push then scans only its new commits.
+- Findings are masked and come with steps for replacing each kind of key.
+
+**Firebase and Supabase checks**
+- Finds the backends named in a site's own code, and flags a server-only Supabase key in a script as critical.
+- With the owner's confirmation, read-only probes check for a readable Firebase Realtime Database, a listable Storage bucket, and readable Supabase tables.
+- A table can be marked as meant to be public, so it stops affecting the grade.
+
+**Combined findings**
+- When a key leaked in your repository belongs to a backend your site uses, the two become one finding, with steps to replace the key and clean up git history.
+- Matching stays inside one owner's repositories and verified domains, and compares project identifiers only.
+- Owners can mark a key as rotated, and reopen it if that was a mistake.
+
+**Grades**
+
+Scores start at 100. Each finding deducts points: critical 25, high 15, medium 7, low 2, info 0.
+
+| Grade | Score |
 |---|---|
-| `frontend/` | Next.js (App Router), TypeScript, Tailwind, shadcn/ui |
-| `backend/` | FastAPI, SQLModel |
-| `docker-compose.yml` | Redis and Postgres for local development |
+| A+ | 95 and up |
+| A | 85 to 94 |
+| B | 70 to 84 |
+| C | 55 to 69 |
+| D | 40 to 54 |
+| F | below 40 |
 
-## Prerequisites
+No HTTPS, or an expired or untrusted certificate, caps the grade at F. Any other critical finding caps it at D. A confirmed admin key leaked in a linked repository costs 25 points once per project and caps the grade at D.
 
-- Node.js 22 or newer
-- Python 3.11 or newer
-- Docker
-- Git 2.31 or newer, and [gitleaks](https://github.com/gitleaks/gitleaks) for repo scanning (`winget install --id Gitleaks.Gitleaks -e`, then open a new terminal)
+## Tech stack
 
-## Setup
+| Layer | Choice |
+|---|---|
+| Frontend | Next.js (App Router), TypeScript, Tailwind CSS, shadcn/ui, TanStack Query |
+| API | FastAPI, Pydantic, SQLModel, Alembic |
+| Jobs | Celery and Redis |
+| Database | PostgreSQL |
+| Sign-in | Supabase Auth (GitHub and magic link), verified by the API |
+| Repository scanning | GitHub App, webhooks, gitleaks |
 
-Commands are for Windows PowerShell, run from the repo root.
+## Architecture
 
-```powershell
-# 1. Env files (never commit the copies)
-Copy-Item .env.example .env
-"NEXT_PUBLIC_API_URL=http://localhost:8000" | Out-File -Encoding ascii frontend/.env.local
-# Then add the Supabase values: see "Sign-in setup" below.
-
-# 2. Redis and Postgres
-docker compose up -d redis postgres
-
-# 3. Backend
-python -m venv backend/.venv
-backend/.venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt
-
-# 4. Database tables, from backend/
-cd backend
-.venv/Scripts/python.exe -m alembic upgrade head
-cd ..
-
-# 5. Frontend
-npm --prefix frontend install
+```mermaid
+flowchart LR
+    Browser["Browser"] --> Web["Next.js frontend"]
+    Browser -->|"sign in"| Auth["Supabase Auth"]
+    Browser -->|"API calls with a bearer token"| API["FastAPI"]
+    API -->|"checks tokens against public keys"| Auth
+    API --> DB[("PostgreSQL")]
+    API -->|"queues scans"| Redis[("Redis")]
+    Redis --> Worker["Celery worker"]
+    Worker --> DB
+    Worker --> Guard["safe_http SSRF guard"]
+    Guard --> Sites["Websites and Firebase or Supabase backends"]
+    GitHub["GitHub"] -->|"signed push webhooks"| API
+    Worker -->|"clones with a short-lived token"| GitHub
+    Worker --> Gitleaks["gitleaks"]
 ```
 
-After pulling changes that add a migration, run `alembic upgrade head` again. To create one after changing a model, run `.venv/Scripts/python.exe -m alembic revision --autogenerate -m "describe the change"` from `backend/` and review the generated file.
+## Security design
 
-Scan DNS lookups fall back automatically from UDP to TCP, DNS-over-HTTPS and then the operating system. If your network blocks UDP DNS, set `SCANNER_DNS_SERVERS=1.1.1.1,8.8.8.8` and a lower `SCANNER_DNS_TIMEOUT_SECONDS` in `.env` to reach the working fallback sooner.
+GapScan points outbound requests at addresses supplied by its users, so it treats its own scanner as a risk.
 
-## Sign-in setup
+- **SSRF guard.** Every outbound HTTP request goes through `backend/app/core/safe_http.py`. It resolves DNS itself, blocks private, loopback, link-local, reserved and multicast addresses on IPv4 and IPv6, checks again after every redirect, and caps redirects, time and response size. The one exception is the repository `git clone`, which only ever targets `https://github.com/<owner>/<name>.git`, with redirects off and the name taken from a GitHub API response.
+- **Domain verification.** Active checks and backend probes run only on domains whose owner proved control with a DNS TXT record or a file. Ownership is proven again before every full scan. Quick scans stay passive.
+- **Polite scanner.** Scans identify themselves with an honest User-Agent, send at most about two requests a second to any host, pause randomly between active checks, and stop requesting a site at its first bot-protection challenge.
+- **Read-only probes.** Backend probes read and never write. Nothing is sent to a backend until the domain's owner confirms it's theirs, and results keep only yes or no answers, counts and table names, never rows.
+- **Secrets never stored.** gitleaks runs with `--redact`, and only a masked form with a fixed prefix such as `AKIA****` is saved. No characters of a real key are kept, so keys are never compared either.
+- **Access and input.** Every record is owner-only, and other people's IDs answer 404. All input is validated with Pydantic, GitHub webhook signatures are verified, CORS is an explicit allowlist, and API routes are rate limited.
 
-Supabase is used for Auth only. App data stays in the local Postgres. Scanning works without this, but sign-in stays off.
+### About GapScanBot, for site owners
 
-1. Open `https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json`. `keys` must not be empty. GapScan only accepts asymmetric signing keys, so a project on the legacy HS256 secret has to rotate to one first.
-2. In Supabase, go to Authentication → Sign In / Providers → GitHub and copy the Callback URL.
-3. At <https://github.com/settings/developers>, create an OAuth App with homepage `http://localhost:3000` and that callback URL.
-4. Paste its Client ID and a new Client Secret into the same Supabase panel, enable GitHub and save. These two values go nowhere else.
-5. In Authentication → URL Configuration, set Site URL to `http://localhost:3000` and add `http://localhost:3000/auth/callback` to Redirect URLs.
-6. Add `SUPABASE_URL` to `.env`, and `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `frontend/.env.local`. See `.env.example`. Restart both dev servers.
+If you found `GapScanBot` in your logs, someone ran GapScan against your site. Unless they proved they control your domain, the scan was passive: the requests look like an ordinary visit. Each deployment is run by whoever installed it, and they can set the User-Agent to link to their own page. To stop a deployment, block its User-Agent or IP address. If you think GapScan itself is being misused, please [open an issue](https://github.com/VivekSharma0502/gapscan/issues).
 
-The backend needs no Supabase secret. Don't add the service role key or the JWT secret to either file. Magic links must be opened in the browser that requested them.
+## Quick start
 
-## GitHub App setup
+This runs quick scans on your machine with no accounts. You need Python 3.11+, Node.js 22+ and Docker. For sign-in, full scans and repository scanning, follow [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md).
 
-Repo scanning uses a GitHub App. This is separate from the OAuth App used for sign-in.
-
-1. Open <https://smee.io>, choose "Start a new channel" and copy the URL. It forwards GitHub's webhooks to your machine.
-2. Generate a webhook secret, from `backend/`: `.venv/Scripts/python.exe -c "import secrets; print(secrets.token_hex(32))"`
-3. At <https://github.com/settings/apps/new>, create the app:
-   - GitHub App name: `GapScan (dev)`. Homepage URL: `http://localhost:3000`.
-   - Setup URL: `http://localhost:3000/repositories/connect`, and tick "Redirect on update".
-   - Leave Callback URL empty and "Request user authorization (OAuth) during installation" off.
-   - Webhook: active. URL: the smee URL. Secret: the value from step 2.
-   - Repository permissions: Contents read-only. Metadata read-only is added automatically.
-   - Subscribe to events: Push. `installation` and `installation_repositories` have no checkbox, because every app receives them.
-   - Where can this GitHub App be installed: Only on this account.
-4. On the app's page, note the App ID and the slug in `github.com/apps/<slug>`. Under Private keys, choose "Generate a private key" to download a `.pem`.
-5. Copy the key to the clipboard as one line of base64: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("$HOME\Downloads\<downloaded-file>.pem")) | Set-Clipboard`
-6. In the root `.env`, set `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_PRIVATE_KEY_B64` (paste) and `GITHUB_WEBHOOK_SECRET` (step 2). Copy `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` into `SUPABASE_PUBLISHABLE_KEY` as well. Then delete the downloaded `.pem`, since a new key can be generated at any time.
-
-To receive webhooks locally, keep this running in a fourth terminal: `npx smee-client --url <smee URL> --target http://127.0.0.1:8000/api/github/webhook`
-
-## Run
-
-Use three terminals, plus a fourth for smee if you want pushes to trigger repo scans.
+Windows PowerShell, from the repo root:
 
 ```powershell
-# Terminal 1: API on http://localhost:8000
+git clone https://github.com/VivekSharma0502/gapscan.git
+cd gapscan
+Copy-Item .env.example .env
+docker compose up -d redis postgres
+python -m venv backend/.venv
+backend/.venv/Scripts/python.exe -m pip install -r backend/requirements.txt
+npm --prefix frontend install
 cd backend
+.venv/Scripts/python.exe -m alembic upgrade head
+```
+
+macOS or Linux: use `cp` to copy the file, and `backend/.venv/bin/python` in place of the Windows path.
+
+Then run each of these in its own terminal:
+
+```powershell
+# API on http://localhost:8000, from backend/
 .venv/Scripts/python.exe -m uvicorn app.main:app --reload --port 8000
 
-# Terminal 2: scan worker
-cd backend
+# Worker, from backend/. --pool=solo is needed on Windows.
 .venv/Scripts/python.exe -m celery -A app.workers.celery_app worker --pool=solo --loglevel=info -Q celery,repo_scans
 
-# Terminal 3: web app on http://localhost:3000
-cd frontend
+# Web app on http://localhost:3000, from frontend/
 npm run dev
 ```
 
-Open http://localhost:3000 and enter a domain to run a quick scan.
+Open <http://localhost:3000> and enter a domain you own.
 
-The worker runs the scans, so without it they stay queued and are marked failed after 5 minutes. `--pool=solo` is required on Windows, where Celery's default pool doesn't work, and runs one scan at a time. Restart the worker after changing its code, because it doesn't reload. `-Q celery,repo_scans` makes it serve website scans and repo scans. Without it, repo scans stay queued. Because `--pool=solo` runs one job at a time, a long repo scan delays website scans locally.
+## Project docs
 
-`--reload` only watches code, so restart the API after editing `.env`.
+- [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md): full setup and troubleshooting
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to contribute, tests and lint
+- [SECURITY.md](SECURITY.md): reporting vulnerabilities and responsible use
+- [PLAN.md](PLAN.md): scope and roadmap
+- [CHANGELOG.md](CHANGELOG.md): history
 
-## Repo scanning
+The product name is set once, in `product.json`. The backend and frontend both read it.
 
-Needs the sign-in and GitHub App setup above, and `git` and `gitleaks` on the worker's PATH. Sign in with GitHub using the account that owns the repos, because an installation is only linked when its account matches the one you signed in with. Personal accounts only for now.
+## License
 
-1. Open <http://localhost:3000/repositories>, choose **Connect GitHub** and pick the repositories to allow.
-2. Choose **Scan now** to check a repo's whole git history. Findings appear under **View findings**, grouped by severity, with steps for replacing each key.
-3. With smee running, each push scans only its new commits. A repo's first scan, a force-push or a missed push covers the whole history.
-
-Scans are capped at 500 MB reported size, 1 GB on disk, 3 minutes to clone, 5 minutes to search, 5 MB per file and 1,000 findings. A scan that hits a cap finishes as incomplete and says why.
-
-If a webhook returns 401:
-- Restart the API if you changed `GITHUB_WEBHOOK_SECRET`, and check it matches the secret on GitHub. If uvicorn reports the port is in use, an old process is still answering on it.
-- smee re-encodes the JSON it forwards, so a delivery containing escapes like `é` or `\/` can fail its signature check locally. This only affects smee, because in production GitHub posts straight to the API.
-
-## Tests and lint
-
-```powershell
-# Backend, from backend/
-.venv/Scripts/python.exe -m pytest
-.venv/Scripts/python.exe -m ruff check .
-.venv/Scripts/python.exe -m ruff format --check .
-
-# Frontend, from frontend/
-npm run lint
-npm run build
-```
-
-## Deploy
-
-Behind a reverse proxy or a platform load balancer, tell uvicorn which proxy to trust, so the API sees each visitor's real IP:
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --forwarded-allow-ips="<your proxy's IP or CIDR>"
-```
-
-- Without `--forwarded-allow-ips`, every visitor appears to come from the proxy and they all share one `POST /api/scans/quick` limit of 5 per minute.
-- Don't use `*` unless the proxy is the only way to reach the app. Otherwise a client can forge `X-Forwarded-For` and get around the limit.
-
-Run the worker without `--pool=solo` on Linux. The default pool runs scans in parallel and enforces the task time limit. In production, run a separate worker with `-Q repo_scans` so repo scans can't hold up website scans, and install `git` and `gitleaks` on it.
-
-For repo scanning in production, create a separate GitHub App with its own key and webhook secret. Point its webhook at `https://<your API>/api/github/webhook` and its Setup URL at `https://<your site>/repositories/connect`, and allow it to be installed on any account.
+GapScan is licensed under the [GNU Affero General Public License v3.0](LICENSE). If you run a modified version as a network service, the AGPL requires you to offer its users the source code of your version.
