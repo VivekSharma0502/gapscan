@@ -31,8 +31,16 @@ const STEP_LABELS: Record<string, string> = {
   "cookies.samesite": "Cookie SameSite flag",
 
   "dns.spf_missing": "SPF record",
+  "dns.spf_multiple_records": "SPF record count",
+  "dns.spf_allow_all": "SPF catch-all rule",
   "dns.spf_weak": "SPF policy",
+  "dns.spf_softfail": "SPF fail mode",
   "dns.dmarc_missing": "DMARC record",
+  "dns.dmarc_monitoring_only": "DMARC policy",
+  "dns.dmarc_quarantine": "DMARC enforcement level",
+  "dns.dmarc_partial": "DMARC coverage",
+  "dns.dmarc_subdomain_none": "DMARC subdomain policy",
+  // Replaced by the DMARC checks above, kept so older scans still read well.
   "dns.dmarc_weak": "DMARC policy",
   "dns.caa_missing": "CAA record",
   "dns.shared_platform_domain": "Shared platform domain",

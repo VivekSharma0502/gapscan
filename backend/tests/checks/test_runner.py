@@ -64,9 +64,15 @@ EXPECTED_CHECKS = {
     "cookies.httponly",
     "cookies.samesite",
     "dns.spf_missing",
+    "dns.spf_multiple_records",
+    "dns.spf_allow_all",
     "dns.spf_weak",
+    "dns.spf_softfail",
     "dns.dmarc_missing",
-    "dns.dmarc_weak",
+    "dns.dmarc_monitoring_only",
+    "dns.dmarc_quarantine",
+    "dns.dmarc_partial",
+    "dns.dmarc_subdomain_none",
     "dns.caa_missing",
     "dns.shared_platform_domain",
     "cms.wordpress_version",
@@ -167,10 +173,19 @@ def test_incomplete_has_a_reason_even_if_none_was_recorded() -> None:
 def test_failed_dns_lookup_keeps_the_score_but_labels_it_partial() -> None:
     report = run_checks(healthy(dmarc_records=None, skip_reasons={Input.DMARC: "DNS failed"}))
     assert report.status is ScanStatus.PARTIAL
-    assert report.score_label == "Partial — 2 checks skipped"
+    assert report.score_label == "Partial — 5 checks skipped"
     assert (report.score, report.grade) == (100, "A+")
     skipped = {item.check_id: item.reason for item in report.skipped}
-    assert skipped == {"dns.dmarc_missing": "DNS failed", "dns.dmarc_weak": "DNS failed"}
+    assert skipped == dict.fromkeys(
+        (
+            "dns.dmarc_missing",
+            "dns.dmarc_monitoring_only",
+            "dns.dmarc_quarantine",
+            "dns.dmarc_partial",
+            "dns.dmarc_subdomain_none",
+        ),
+        "DNS failed",
+    )
 
 
 def test_failed_tls_probe_keeps_the_score_but_labels_it_partial() -> None:
@@ -254,9 +269,15 @@ def test_shared_platform_is_scored_without_dns_penalties() -> None:
     assert (report.score, report.grade) == (100, "A+")
     assert {item.check_id for item in report.skipped} == {
         "dns.spf_missing",
+        "dns.spf_multiple_records",
+        "dns.spf_allow_all",
         "dns.spf_weak",
+        "dns.spf_softfail",
         "dns.dmarc_missing",
-        "dns.dmarc_weak",
+        "dns.dmarc_monitoring_only",
+        "dns.dmarc_quarantine",
+        "dns.dmarc_partial",
+        "dns.dmarc_subdomain_none",
         "dns.caa_missing",
     }
 
@@ -308,3 +329,23 @@ def test_report_serialises_to_the_required_fields() -> None:
     assert {"check_id", "category", "severity", "title", "evidence", "fix"} <= set(finding)
     assert {"what_it_means", "how_to_fix", "platforms"} <= set(finding["fix"])
     assert set(finding["fix"]["platforms"]) == {"vercel", "netlify", "nginx", "cloudflare"}
+
+
+@pytest.mark.parametrize(
+    ("spf", "dmarc", "score", "grade"),
+    [
+        ("v=spf1 -all", "v=DMARC1; p=reject", 100, "A+"),
+        ("v=spf1 -all", "v=DMARC1; p=quarantine", 100, "A+"),
+        ("v=spf1 ~all", "v=DMARC1; p=reject", 100, "A+"),
+        ("v=spf1 -all", "v=DMARC1; p=reject; pct=25", 98, "A+"),
+        # p=none stops as much spoofing as no record, so both cost the same.
+        ("v=spf1 ~all", "v=DMARC1; p=none", 93, "A"),
+        ("v=spf1 ~all", "", 93, "A"),
+        ("v=spf1 +all", "v=DMARC1; p=none", 78, "B"),
+    ],
+)
+def test_email_auth_policies_grade_by_strength(
+    spf: str, dmarc: str, score: int, grade: str
+) -> None:
+    report = run_checks(healthy(spf_records=[spf], dmarc_records=[dmarc] if dmarc else []))
+    assert (report.score, report.grade) == (score, grade)

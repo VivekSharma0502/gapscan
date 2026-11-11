@@ -29,17 +29,73 @@ TEXT: dict[str, CheckText] = {
             platforms=dns_record_fixes("TXT", "@", "v=spf1 -all", _SPF_SENDING_NOTE),
         ),
     ),
-    "dns.spf_weak": CheckText(
-        title="SPF record does not protect your domain",
+    "dns.spf_multiple_records": CheckText(
+        title="More than one SPF record",
         fix=Fix(
             what_it_means=(
-                "Your SPF record exists but doesn't work as protection. Either it allows any "
-                "server to send as you, or there is more than one SPF record, which makes "
-                "receiving mail servers treat SPF as broken."
+                "Your domain has several SPF records. The rules say there must be exactly one, "
+                "so receiving mail servers treat SPF as broken and ignore all of them. Your "
+                "real email may land in spam, and fake email isn't stopped."
             ),
             how_to_fix=(
-                "Keep one SPF record and end it with -all or ~all. Merge multiple records into "
-                "one, keeping every include from your email providers."
+                "Merge them into one TXT record that starts with v=spf1, keeps every include "
+                "from each of your email providers, and ends with -all or ~all. Then delete "
+                "the others."
+            ),
+            platforms=dns_record_fixes(
+                "TXT", "@", "v=spf1 include:provider-one.example include:provider-two.example ~all"
+            ),
+        ),
+    ),
+    "dns.spf_allow_all": CheckText(
+        title="SPF record lets any server send as you",
+        fix=Fix(
+            what_it_means=(
+                "Your SPF record ends with +all (or a bare all), which tells receiving mail "
+                "servers that every server on the internet may send email for your domain. "
+                "That is worse than having no SPF record: fake emails pass the SPF check, and "
+                "that pass can also get them through DMARC."
+            ),
+            how_to_fix=(
+                "Change the ending to -all, or ~all while you confirm your real email still "
+                "arrives. Keep the includes your email providers gave you, and make sure every "
+                "service that sends as you is listed."
+            ),
+            platforms=dns_record_fixes(
+                "TXT", "@", "v=spf1 include:your-mail-provider.example -all"
+            ),
+        ),
+    ),
+    "dns.spf_weak": CheckText(
+        title="SPF record doesn't say what to do with other senders",
+        fix=Fix(
+            what_it_means=(
+                "Your SPF record ends with ?all, or has no all at the end, which means the "
+                "same. That tells receiving mail servers to stay neutral about servers you "
+                "haven't listed, so the record lists your senders but doesn't protect you."
+            ),
+            how_to_fix=(
+                "End the record with ~all or -all. ~all marks other senders as suspicious and "
+                "leaves the final decision to DMARC. -all tells receivers to reject them."
+            ),
+            platforms=dns_record_fixes(
+                "TXT", "@", "v=spf1 include:your-mail-provider.example ~all"
+            ),
+        ),
+    ),
+    "dns.spf_softfail": CheckText(
+        title="SPF uses ~all (soft fail)",
+        fix=Fix(
+            what_it_means=(
+                "Your SPF record ends with ~all, so mail from servers you haven't listed is "
+                "marked as suspicious rather than rejected outright. This is the setting most "
+                "email providers recommend, and it doesn't lower your score. With an enforcing "
+                "DMARC policy (quarantine or reject), the forged mail is still stopped."
+            ),
+            how_to_fix=(
+                "Nothing is required. If DMARC isn't enforcing yet, fix that first, because it "
+                "matters more. Once you're sure every service that sends as you is listed, you "
+                "can switch to -all, which tells receivers to reject other senders outright."
             ),
             platforms=dns_record_fixes(
                 "TXT", "@", "v=spf1 include:your-mail-provider.example -all"
@@ -62,20 +118,74 @@ TEXT: dict[str, CheckText] = {
             platforms=dns_record_fixes("TXT", "_dmarc", "v=DMARC1; p=reject", _DMARC_SENDING_NOTE),
         ),
     ),
-    "dns.dmarc_weak": CheckText(
-        title="DMARC only monitors and blocks nothing",
+    "dns.dmarc_monitoring_only": CheckText(
+        title="DMARC is monitoring only: spoofed mail is still delivered",
         fix=Fix(
             what_it_means=(
-                "Your DMARC policy is set to none, or has no valid policy, so email that fails "
-                "your domain's checks is still delivered. That is fine for a short monitoring "
-                "period, but it doesn't stop anyone impersonating you."
+                "Your DMARC policy is p=none, or has no valid policy and is treated that way. "
+                "Receiving mail servers send you reports, but they still deliver email that "
+                "fails your domain's checks. Against impersonation that protects no more than "
+                "having no DMARC record, so it costs the same points."
             ),
             how_to_fix=(
-                "Check your DMARC reports to confirm your real email passes, then change the "
-                "policy to p=quarantine, and later to p=reject."
+                "p=none is a good first step: it lets you see who sends as you without "
+                "blocking anything. Read the reports for a few weeks, fix any real service "
+                "that fails, then change the policy to p=quarantine, and later to p=reject."
             ),
             platforms=dns_record_fixes(
                 "TXT", "_dmarc", "v=DMARC1; p=quarantine; rua=mailto:you@example.com"
+            ),
+        ),
+    ),
+    "dns.dmarc_quarantine": CheckText(
+        title="DMARC quarantines spoofed mail; reject is stronger",
+        fix=Fix(
+            what_it_means=(
+                "Your DMARC policy is p=quarantine, so email that fails your domain's checks "
+                "goes to spam. That is real protection and doesn't lower your score. Spoofed "
+                "mail can still reach a spam folder, where someone may open it."
+            ),
+            how_to_fix=(
+                "Once your reports show all your real email passes, change the policy to "
+                "p=reject so receivers refuse the spoofed mail outright."
+            ),
+            platforms=dns_record_fixes(
+                "TXT", "_dmarc", "v=DMARC1; p=reject; rua=mailto:you@example.com"
+            ),
+        ),
+    ),
+    "dns.dmarc_partial": CheckText(
+        title="DMARC policy only applies to some mail",
+        fix=Fix(
+            what_it_means=(
+                "Your DMARC record sets pct below 100, or t=y (testing). Receivers apply your "
+                "policy to only that share of failing email, and treat the rest one step more "
+                "gently: reject becomes quarantine, and quarantine becomes none."
+            ),
+            how_to_fix=(
+                "A lower pct is a fine way to roll out a stricter policy. Once your reports "
+                "look clean, remove pct (it defaults to 100) and any t=y tag."
+            ),
+            platforms=dns_record_fixes(
+                "TXT", "_dmarc", "v=DMARC1; p=reject; rua=mailto:you@example.com"
+            ),
+        ),
+    ),
+    "dns.dmarc_subdomain_none": CheckText(
+        title="DMARC doesn't protect your subdomains",
+        fix=Fix(
+            what_it_means=(
+                "Your main DMARC policy is strict, but sp=none turns it off for subdomains. "
+                "Anyone can send convincing fake email from addresses like "
+                "billing.yourdomain.com, and it will still be delivered."
+            ),
+            how_to_fix=(
+                "Remove the sp tag so subdomains follow your main policy, or set it to "
+                "sp=quarantine or sp=reject. If a subdomain sends real email, give it its own "
+                "DMARC record instead."
+            ),
+            platforms=dns_record_fixes(
+                "TXT", "_dmarc", "v=DMARC1; p=reject; rua=mailto:you@example.com"
             ),
         ),
     ),

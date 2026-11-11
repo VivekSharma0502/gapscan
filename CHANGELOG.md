@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-11-11: Precise DMARC and SPF grading
+
+**Changed**
+- DMARC `p=none` is now its own finding, "monitoring only: spoofed mail is still delivered", and costs 7 points (MEDIUM), the same as having no DMARC record. It used to cost 2. The fix text calls it a good first step and explains how to move to quarantine.
+- `p=quarantine` is a pass with a free note that `p=reject` is stronger. `p=reject` is a plain pass.
+- New DMARC findings, 2 points each: `pct` below 100 or `t=y` on a strict policy, and `sp=none` when the main policy is strict.
+- DMARC follows RFC 7489 more closely. Several DMARC records, or a record with no valid `p` and no `rua`, count as no DMARC. A record with no valid `p` but with `rua` counts as `p=none`.
+- SPF `+all` (or a bare `all`) is now its own HIGH finding (15 points), because forged mail then passes SPF and can satisfy DMARC too.
+- SPF `?all`, or a record with no `all` and no `redirect=`, stays a MEDIUM finding. Several SPF records are now their own MEDIUM finding with a merge fix.
+- SPF `~all` gets a free note explaining soft fail versus `-all`. `-all` is a plain pass.
+- The `dns.dmarc_weak` check is replaced by the new checks. Old scans keep their stored findings.
+
+**Why**
+- A reader asked whether the grade tells monitoring-only DMARC apart from enforcement. It did, but `p=none` cost only 2 points and kept an A+, and `+all` cost the same as `?all`.
+
 ## 2026-11-10: Preparing the repo for open source
 
 **Changed**
